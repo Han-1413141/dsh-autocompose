@@ -50,6 +50,9 @@ const env = { ...process.env, DSH_HOME: join(root, 'host'), DSH_TELEMETRY_DISABL
 let harness;
 const previousKey = process.env.DEEPSEEK_API_KEY, previousUrl = process.env.DEEPSEEK_BASE_URL;
 try {
+  // Provision the SDK profile before timing the JSON-RPC handshake, as runPlan does.
+  await promisify(execFile)(process.execPath, [cli, '--profile', 'sdk', '--dump-config'],
+    { cwd: root, env, windowsHide: true, timeout: 120000 });
   harness = new DeepSeekHarness({ dshBin: cli, dshHome: env.DSH_HOME, cwd: root, processCwd: root, env,
     patches: [patch], initializeTimeoutMs: 30000, requestTimeoutMs: 60000 });
   const result = await harness.run('Exercise the autocompose tool using the local fixture.');
