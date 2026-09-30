@@ -1,0 +1,8 @@
+node_modules/
+lib/
+.test-output/
+.dsh-autocompose/
+*.tgz
+*.log
+.env
+.env.*
