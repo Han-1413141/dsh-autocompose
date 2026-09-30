@@ -14,12 +14,15 @@ test('Windows 读取者短暂占用安装记录时，原子替换等待释放后
   const quote = (s: string) => `'${s.replaceAll("'", "''")}'`;
   const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     `$stream = [IO.File]::Open(${quote(file)}, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read); try { [IO.File]::WriteAllText(${quote(ready)}, 'ready'); Start-Sleep -Milliseconds 450 } finally { $stream.Dispose() }`],
-  { windowsHide: true, stdio: 'ignore' });
+  { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+  let diagnostic = '';
+  child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-2000); });
   const exited = once(child, 'exit');
   t.after(async () => { if (child.exitCode === null) child.kill(); await exited; await rm(root, { recursive: true, force: true }); });
-  for (let i = 0; ; i++) {
+  const deadline = Date.now() + 15000;
+  for (;;) {
     if (await stat(ready).then(() => true, () => false)) break;
-    assert(child.exitCode === null && i < 200, 'fixture reader did not acquire its handle');
+    assert(child.exitCode === null && Date.now() < deadline, `fixture reader did not acquire its handle (exit ${child.exitCode}): ${diagnostic}`);
     await new Promise(done => setTimeout(done, 10));
   }
   await writeJson(file, { status: 'completed' });
