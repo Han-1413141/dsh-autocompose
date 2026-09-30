@@ -17,6 +17,12 @@ export interface Candidate {
 export const RUNTIME_VERSION = '0.2.0-rc.2';
 export const registryUrl = 'https://registry.npmjs.org';
 
+export function packageMetadata(data: PackageManifest): PackageManifest {
+  return { name: data.name, version: data.version, description: data.description, dsh: data.dsh,
+    dependencies: data.dependencies, peerDependencies: data.peerDependencies, peerDependenciesMeta: data.peerDependenciesMeta,
+    engines: data.engines, os: data.os, dshCompat: data.dshCompat };
+}
+
 export const builtins: Candidate[] = [{
   name: '@deepseek-ai/dsh-base', version: RUNTIME_VERSION,
   capabilities: ['code', 'git', 'web', 'shell'], permissions: ['workspace-read', 'workspace-write', 'network', 'process'],
@@ -41,12 +47,7 @@ export async function inspectCandidate(name: string, exactVersion: string, capab
   const meta = compatMetadata(data.dshCompat);
   const dist = object(data.dist, 'npm dist');
   const integrity = string(dist.integrity, 'dist.integrity');
-  const manifest: PackageManifest = {
-    name, version: exactVersion, description: data.description, dsh: data.dsh,
-    dependencies: data.dependencies,
-    peerDependencies: data.peerDependencies, peerDependenciesMeta: data.peerDependenciesMeta,
-    engines: data.engines, os: data.os, dshCompat: data.dshCompat,
-  };
+  const manifest = packageMetadata(data);
   return { name, version: exactVersion, capabilities: capabilities ?? meta.capabilities ?? [],
     permissions: meta.permissions ?? ['host-code: filesystem, network, processes'],
     description: data.description ?? name, source: 'npm', manifest, integrity, capabilitySource: capabilities ? 'catalog' : 'manifest',

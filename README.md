@@ -1,120 +1,123 @@
 # dsh-autocompose
 
-**Task-aware plugin composition for DeepSeek Harness.**
+**描述任务，选择插件，再决定临时使用还是长期保留。**
 
-根据任务选择插件，展示兼容性与权限，再在独立运行环境中执行。当前实现对应 DSH `0.2.0-rc.2`，Node.js `>=22.19`。
+AutoCompose 根据任务识别所需能力，从已有的 DSH 插件中选择组合，并展示版本、权限声明与兼容性检查结果。你可以在临时环境中执行一次任务，也可以把方案中的插件直接安装到当前 DSH 主环境，供后续任务使用。
+
+它组装的是已有插件，不生成插件代码。生成方案和安装插件都不调用模型；只有执行任务时才调用模型。
+
+[安装](#安装) · [第一次使用](#第一次使用) · [安装到主环境](#安装到主环境) · [配置与命令行](docs/configuration.md) · [常见问题](#常见问题)
 
 ## 安装
 
-在 DSH 插件管理页的安装框中输入以下包名：
+当前版本适配 **DSH `0.2.0-rc.2`**，要求 Node.js `>=22.19`。
+
+在 DSH 插件管理页的安装框中输入：
 
 ```text
-dsh-autocompose@0.2.1
+dsh-autocompose@0.3.0
 ```
 
-Desktop 命令行安装：
+也可以粘贴仓库地址：
+
+```text
+https://github.com/Han-1413141/dsh-autocompose
+```
+
+使用 Desktop 命令行安装：
 
 ```powershell
-dsh plugin --profile desktop add dsh-autocompose@0.2.1 --save-exact --ignore-scripts
+dsh plugin --profile desktop add dsh-autocompose@0.3.0 --save-exact --ignore-scripts
 ```
 
-Web 用户将 `desktop` 改成 `web`。也可在安装框中粘贴仓库地址 `https://github.com/Han-1413141/dsh-autocompose`；从 0.2.1 起，仓库已包含编译后的 `lib/`，安装时无需构建，也无需添加 `allowBuilds`。
+Web 用户把 `desktop` 改为 `web`。按 DSH 提示刷新页面或重启后，打开侧边栏的 **“自组装”**。插件复用现有 DSH 运行时，安装时不下载另一套 DSH，也无需允许构建脚本。
 
-如果仍出现 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，检查安装目标是否固定到了 0.2.0 的旧提交；改用上面的 npm 包名，或重新粘贴仓库地址。`Failed to replace env in config: ${NPM_TOKEN}` 是 npm 配置变量提示，与 Git 构建被拦截是两个问题；安装这两个公开包不需要 npm Token。
+## 第一次使用
 
-安装后打开侧边栏“自组装”。独立 CLI 可通过 `npx --yes --package=dsh-autocompose@0.2.1 dsh-autocompose --help` 查看用法。SDK 客户端已编译在插件中；任务执行复用现有 DSH `0.2.0-rc.2`，仍使用独立配置目录，并需要 pnpm 和模型凭据。安装插件不再下载另一套 DSH。规划不调用模型。
+1. **输入任务和工作目录。** 例如“读取项目中的 PDF，提取需求并检查相关代码”。目录填写任务文件所在文件夹的完整路径。
+2. **点击“生成方案”。** 查看识别出的能力、选中的插件和版本。搜索候选的能力来自包说明，实际效果需要运行验证。
+3. **处理缺项或冲突。** 页面会列出缺少的能力和兼容性问题；缺项未解决时不能运行或安装。可以调整任务，或[指定候选目录](docs/configuration.md#固定候选目录)。
+4. **选择使用方式。** 临时使用选“检查并运行”；希望后续任务也能使用这些插件，选“安装到主环境”。两种方式都会先展示确认内容。
 
-[源码](https://github.com/Han-1413141/dsh-autocompose) · [问题反馈](https://github.com/Han-1413141/dsh-autocompose/issues) · [故障覆盖表](https://github.com/Han-1413141/dsh-autocompose/blob/master/docs/failure-matrix.md)
+|  | 临时运行 | 安装到主环境 |
+| --- | --- | --- |
+| 适合什么情况 | 先试用组合，或只完成这一次任务 | 长期使用这组插件 |
+| 插件安装在哪里 | 独立的临时 `DSH_HOME`，使用 `sdk` profile | 当前打开 AutoCompose 的 profile |
+| 是否执行输入的任务 | 是，需要模型配置和凭据 | 否，仅安装并启用插件 |
+| 结束后如何处理 | 默认清理，可勾选保留 | 持续保留，可在 DSH 插件管理中停用或卸载 |
 
-## Web 页面
+代码、Git、联网检索和终端等能力可能已由官方基础环境提供。如果方案只包含基础能力，页面会显示“无需额外安装”。PDF、浏览器、视觉和记忆等能力是否可用，取决于能否找到满足要求的插件。
 
-安装到 Web profile 后，点击侧边栏“自组装”。输入任务与工作目录，生成组合，再查看能力覆盖、插件版本、兼容性提示和权限。缺少能力时会说明缺项，并阻止运行。
+## 安装到主环境
 
-页面提供只读与工作区修改两种模式；点击运行后，再在原生弹窗中确认。任务由宿主后台执行，切换页面不会中止，可以主动取消。进度显示准备、安装、检查、执行和清理阶段，结束后保留结果与清理状态。
+这里的“主环境”指 **当前运行 AutoCompose 的 DSH profile**：在 Desktop 中通常是 `desktop`，在 Web 中通常是 `web`。确认弹窗会显示实际 profile 名称和完整目录。
 
-预设、最近计划和运行历史保存在同一状态目录中。复用预设会重新计算兼容性；换任务时也重新识别所需能力。异常退出后未完成的记录显示“已中断”；其他进程仍在运行的任务保持运行状态。历史记录会跳过无法读取的文件并显示提示。
+### 直接安装
 
-界面跟随 DSH 明暗主题，使用原生按钮、输入框和确认弹窗。规划不会调用模型；执行使用下方配置的模型和凭据。
+1. 生成或打开一个可用方案，点击 **“安装到主环境”**。
+2. 检查弹窗中的目标目录、插件名称、版本变化和权限声明。每个插件会标明“新增”“替换版本”“启用”或“已就绪，直接复用”。
+3. 点击 **“确认安装并启用”**。如果与主环境中已有插件存在已知冲突，确认按钮会禁用，并显示原因。
+4. 查看结果和 **“安装记录”**。DSH 要求重启时，页面会明确提示；重启后再使用这些插件。
 
-## 工作流程
+![主环境安装确认弹窗](docs/images/main-install-preview.jpg)
 
-1. 从中文或英文任务识别 `pdf / web / code / git / browser / vision / memory / shell`，也支持显式指定能力。
-2. 复用官方 SDK 基础环境。缺少 PDF、浏览器、视觉或记忆能力时，搜索 npm，检查最多 5 个候选的 bundle 元数据和版本要求；一次最多搜索 4 种能力。
-3. 优先选择覆盖所需能力、依赖满足、权限声明较少的组合，拒绝已知冲突与旧版核心组件依赖。搜索说明推断出的能力会明确标注，不能当成功能验证。
-4. 保存包含任务、目录、包版本、制品完整性值、权限和指纹的计划。缺少能力时禁止执行。
-5. 用户批准后创建独立 `DSH_HOME`，通过官方 CLI 安装精确版本的插件，禁止依赖生命周期脚本；核验实际安装内容并通过官方 SDK 执行。
-6. 返回最终回复、会话标识及事件数量，关闭子进程，删除本次临时目录，保留运行记录。`--keep` 可以保留环境用于排障。
+图中插件来自临时测试环境，用于演示安装预览。
 
-## 命令行
+安装使用 DSH 官方插件管理接口，固定到方案中的精确版本。开始变更前，会保存主环境的包清单、锁文件和相关配置；安装后再次检查包的版本、声明与兼容性，再按依赖顺序启用。已有同版本且已启用的插件直接复用；已有其他版本会明确显示版本替换。官方核心组件、AutoCompose 和 Compat Guardian 不作为方案中的替换目标。
 
-以下命令在代码仓库根目录执行，先完成根目录的 `npm install --ignore-scripts` 和 `npm run build`。
+安装期间可以切换页面。“停止安装”会请求取消当前下载，并停止后续操作；已经完成的安装和启用会保留。失败时记录会逐项显示处理状态，便于重试或在 DSH 插件管理中清理。多插件安装不是一次整体事务，配置备份也不是整个插件目录的快照。
 
-```powershell
-# 只生成计划；缺少能力时查询公共 npm 元数据。
-node lib/cli.js plan --task "提取 PDF 内容并检查代码仓库"
+主环境中的插件使用宿主权限。临时任务的“只读”设置不限制主环境插件；插件声明的权限用于展示和检查，不是对第三方代码的操作系统级隔离。
 
-# 仅用内置能力规划，不补充搜索；能力不足会列入 missing。
-node lib/cli.js plan --task "检查代码仓库" --no-discovery
+### 先试用，再保留
 
-# 查看计划后，替换计划 ID 再执行。此步需要模型凭据。
-node lib/cli.js run --id <planId> --yes
+先选择“检查并运行”，确认组合适合任务后，在 **“运行记录”** 中点击 **“查看方案与安装选项”**，再选择“安装到主环境”。安装前会重新检查当前环境。
 
-# 明确允许任务工具修改工作目录。
-node lib/cli.js run --id <planId> --mode workspace-write --yes
+这一步按方案重新安装插件包，不复制临时环境中的凭据、会话、模型配置或插件运行数据。需要配置的插件仍在主环境中按其说明配置。
 
-# 保存并复用插件组合。
-node lib/cli.js save-preset --id <planId> --preset code-review
-node lib/cli.js use-preset --preset code-review --task "检查另一个代码问题" --yes
+## 临时运行
 
-# 单独搜索候选；不安装、不调用模型。
-node lib/cli.js discover --capability pdf
-```
+在方案下方选择任务目录权限：默认 **只读**；开发或修复任务可以选择 **允许修改**。点击“检查并运行”，核对目录和插件后确认。
 
-CLI 默认状态目录为当前目录下的 `.dsh-autocompose`；可用 `--root` 指定。`--cwd` 指定任务目录。所有操作都应保持同一状态目录。默认 provider 为 `deepseek-official`，模型为 `deepseek-v4-flash`，默认仅向子进程转发 `DEEPSEEK_API_KEY`，不复制原 DSH 凭据文件。自定义 provider 需要相应的子环境配置，单改模型名称不会自动复制宿主 provider。
+任务由 DSH 后台执行，切换页面后继续运行。页面展示准备、安装、检查、执行和清理进度，支持取消；结束后保存回复和清理结果。勾选“保留临时环境”可留下该次环境排查问题。
 
-DSH 页面与工具自动使用宿主安装目录。通过 `npx` 单独执行任务时，使用 `--install-anchor <现有DSH安装中的package.json>` 指定运行时；缺少运行时或版本不匹配会给出错误，不会自动安装整套宿主。查看帮助、规划和发现插件无需该参数。
+默认模型为 `deepseek-official / deepseek-v4-flash`。子进程保留必要的系统与代理环境变量，默认额外转发 `DEEPSEEK_API_KEY`。Desktop 的登录状态不会自动复制为临时环境凭据。使用其他模型或 provider 时，先阅读[模型与凭据配置](docs/configuration.md#模型与凭据)。规划和主环境安装无需模型凭据。
 
-`--timeout` 默认为 600000 毫秒。取消操作会关闭所拥有的 SDK 子进程；关闭无法确认时保留临时目录并报告错误。独立配置目录不是安全沙箱。
+## 预设与对话操作
 
-## DSH 工具与配置
+**保存为预设**会保存任务目录和插件的精确版本。复用预设时会重新检查兼容性，不自动安装，也不自动追踪 `latest`。
 
-工具名为 `autocompose`，支持 `plan`、`run`、`save_preset`、`discover`。执行计划限定在创建它的会话中。实际运行通过 DSH 的权限与批准服务；不会以一个模型生成的 `approved: true` 参数代替真实批准。
+你也可以在 DSH 对话中提出：
 
-在目标 profile 的 `cordis.patch.yml` 中追加需要覆盖的字段：
+> 为读取 PDF 并检查代码生成插件方案，先让我查看，再把选中的插件安装到当前环境。
 
-```yaml
-- id: autocompose
-  config:
-    timeoutMs: 600000
-    autoDiscover: true
-    # 可选：使用自己的固定版本目录。
-    # catalog: C:/path/to/catalog.json
-    # 可选：显式允许传入子环境的变量名，不填写凭据值。
-    envKeys: [DEEPSEEK_API_KEY]
-```
+`autocompose` 工具依次使用 `plan` → `install_preview` → `install`。实际安装经过 DSH 的批准流程，临时执行使用 `run`。工具参数与 CLI 用法见[配置与命令行](docs/configuration.md)。
 
-宿主默认状态目录为 `$DSH_HOME/autocompose`。配置中的 `root` 可覆盖它。计划不会更改宿主 profile 的插件选择。
+## 常见问题
 
-## 固定候选目录
+### 为什么没有找到所需插件？
 
-通过 `--catalog <path>` 或插件配置指定 JSON。包必须已发布到 npm，版本必须精确；目录提供的能力属于维护者声明。下例中的包名是待替换占位符：
+自动发现依赖 npm 搜索、包的 DSH bundle 声明和版本要求。包未发布、缺少 bundle 声明、能力说明不足或存在兼容性错误，都可能无法进入方案。可以在固定候选目录中明确指定已发布的包、版本和能力，再重新生成方案。
 
-```json
-{
-  "schemaVersion": 1,
-  "plugins": [
-    { "name": "your-pdf-plugin", "version": "1.0.0", "capabilities": ["pdf"] }
-  ]
-}
-```
+### 临时运行成功后，为什么主环境里没有这些插件？
 
-需要严格限定候选范围时，同时指定 `--no-discovery` / `autoDiscover: false`，关闭补充搜索。此时仍会读取目录中明确指定 npm 包的元数据。未提供目录且关闭补充搜索时，仅使用内置能力，规划过程不联网。
+临时运行使用独立环境，默认结束后清理。需要保留到主环境时，打开该方案，选择“安装到主环境”。
 
-组合预设保存的是任务目录和精确版本。不会自动追踪 `latest` 或在原会话中安装新版本。历史区分运行、完成、失败、取消和中断，记录阶段、时间、临时目录和清理结果；正常返回不代表已经评价回复质量。
+### 为什么提示安装预览失效？
+
+预览生成后，插件列表或配置发生了变化，或者 DSH 已重启、该预览已使用。重新点击“安装到主环境”即可获取新的检查结果。插件发布内容变化时，需要重新生成整个方案。
+
+### 安装只完成了一部分，怎么办？
+
+打开“安装记录”查看每个插件的状态和错误。处理冲突、网络或构建授权问题后重新预览：已安装并启用的同版本插件会复用；不需要保留的插件可在 DSH 插件管理中停用或卸载。AutoCompose 不自动删除已经成功安装的插件。
+
+### 安装 AutoCompose 时出现 Git 构建被拦截或 NPM_TOKEN 提示？
+
+`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 通常来自固定到 0.2.0 的旧 Git 提交。改用本页的 npm 包名或当前仓库地址；从 0.2.1 起仓库包含编译产物，安装不需要构建许可。`Failed to replace env in config: ${NPM_TOKEN}` 是 npm 配置变量提示；安装公开的 AutoCompose 包不需要 npm Token。
 
 ## 开发与验证
 
-本仓库可独立构建和测试，无需检出另一个插件：
+本仓库可独立构建，无需检出配套插件：
 
 ```powershell
 npm ci --ignore-scripts
@@ -122,15 +125,12 @@ npm run typecheck
 npm test
 npm run build
 npm run test:host
+npm run test:main-install
 npm run preview
 ```
 
-发布前运行 `npm run pack:release`。提交源码修改时同时提交重新生成的 `lib/`；CI 会核对产物与源码，并用禁止构建脚本的全新 profile 测试 Git 安装。
+发布前运行 `npm run pack:release`。源码修改需同时提交重新生成的 `lib/`；CI 核对产物与源码，并在禁止构建脚本的全新 profile 中验证 Git 安装。主环境安装测试使用临时 profile 和无业务逻辑的测试插件，不修改日常 DSH 环境。
 
-配套插件：[dsh-compat-guardian](https://github.com/Han-1413141/dsh-compat-guardian)。两者可分别安装。
+[配置与命令行](docs/configuration.md) · [故障覆盖表](docs/failure-matrix.md) · [验证记录](docs/validation.md) · [版本记录](CHANGELOG.md) · [问题反馈](https://github.com/Han-1413141/dsh-autocompose/issues)
 
-[故障覆盖表](docs/failure-matrix.md) · [验证记录](docs/validation.md) · [版本记录](CHANGELOG.md)
-
-## 界面
-
-![dsh-autocompose 原生 Web 界面](docs/images/autocompose-dark.jpg)
+配套插件：[dsh-compat-guardian](https://github.com/Han-1413141/dsh-compat-guardian)，用于检查和处理已安装插件的兼容性问题。两者可分别安装。

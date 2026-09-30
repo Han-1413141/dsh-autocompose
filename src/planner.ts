@@ -50,7 +50,7 @@ export function createPlan(input: { task: string; cwd: string; runtimeVersion: s
   const byName = new Map<string, Candidate[]>();
   for (const item of input.catalog) byName.set(item.name, [...(byName.get(item.name) ?? []), item]);
   const coverage = () => new Set(selected.flatMap(x => x.capabilities));
-  const explanation = ['使用独立 DSH_HOME 和 sdk profile；配置隔离不等于操作系统安全沙箱。'];
+  const explanation = ['可选择在独立 DSH_HOME 中临时运行，或将选中的第三方插件安装到当前主环境。'];
   const rejected = new Set<string>();
   const addDependencies = (candidate: Candidate, group: Map<string, Candidate>, visiting: Set<string>): boolean => {
     if (visiting.has(candidate.name)) return false;

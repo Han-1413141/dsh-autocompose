@@ -27,3 +27,5 @@ jobs:
         timeout-minutes: 5
       - run: npm run test:host
         timeout-minutes: 5
+      - run: npm run test:main-install
+        timeout-minutes: 5

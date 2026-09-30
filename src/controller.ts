@@ -8,6 +8,7 @@ import { RUNTIME_VERSION } from './catalog.ts';
 import { loadPlan, savePlan, type ComposePlan } from './planner.ts';
 import { planTask } from './planning.ts';
 import { loadPreset, runIsActive, runPlan, savePreset, type RunEvidence, type RunOptions } from './runner.ts';
+import type { HostInstaller, InstallEvidence, MainEnvironment } from './host-install.ts';
 
 const key = z.string().uuid();
 const presetName = z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/);
@@ -21,17 +22,21 @@ const requests = z.discriminatedUnion('action', [
   z.object({ action: z.literal('savePreset'), planId: key, name: presetName }).strict(),
   z.object({ action: z.literal('loadPreset'), name: presetName }).strict(),
   z.object({ action: z.literal('getPlan'), planId: key }).strict(),
+  z.object({ action: z.literal('previewInstall'), planId: key, fingerprint: z.string().length(64) }).strict(),
+  z.object({ action: z.literal('install'), previewId: key }).strict(),
 ]);
 export interface ComposeJob {
-  id: string; kind: 'plan' | 'run'; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
-  startedAt: string; plan?: ComposePlan; run?: RunEvidence; error?: string;
+  id: string; kind: 'plan' | 'run' | 'install'; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
+  startedAt: string; plan?: ComposePlan; run?: RunEvidence; install?: InstallEvidence; error?: string;
 }
 export interface ComposeOverview {
   cwd: string; runtimeVersion: string; jobs: ComposeJob[]; history: RunEvidence[];
   presets: { name: string; task: string }[]; plans: ComposePlan[];
   notices: string[];
+  mainEnvironment?: MainEnvironment;
+  installations: InstallEvidence[];
 }
-interface Options extends Omit<RunOptions, 'signal' | 'onProgress'> { catalog?: string; autoDiscover?: boolean }
+interface Options extends Omit<RunOptions, 'signal' | 'onProgress'> { catalog?: string; autoDiscover?: boolean; installer?: HostInstaller }
 
 async function recent<T>(directory: string, count: number, notices: string[]): Promise<T[]> {
   let names: string[];
@@ -58,7 +63,8 @@ export class ComposeController {
     const abort = new AbortController();
     const view: ComposeJob = { id: randomUUID(), kind, status: 'running', startedAt: new Date().toISOString() };
     const promise = Promise.resolve().then(() => work(abort.signal, view)).then(() => {
-      view.status = abort.signal.aborted || view.run?.status === 'cancelled' ? 'cancelled' : view.run?.status === 'failed' ? 'failed' : 'completed';
+      view.status = abort.signal.aborted || view.run?.status === 'cancelled' || view.install?.status === 'cancelled' ? 'cancelled' :
+        view.run?.status === 'failed' || (view.install && view.install.status !== 'completed') ? 'failed' : 'completed';
     }).catch(error => { view.status = abort.signal.aborted ? 'cancelled' : 'failed'; view.error = String(error); });
     this.jobs.set(view.id, { view, abort, promise });
     while (this.jobs.size > 12) this.jobs.delete(this.jobs.keys().next().value!);
@@ -71,14 +77,18 @@ export class ComposeController {
   }
   async overview(): Promise<ComposeOverview> {
     const notices: string[] = [];
-    const [history, presets, plans] = await Promise.all([
+    const [history, presets, plans, installations] = await Promise.all([
       recent<RunEvidence>(join(this.options.root, 'history'), 30, notices),
       recent<{ name: string; plan: ComposePlan }>(join(this.options.root, 'presets'), 30, notices),
       recent<ComposePlan>(join(this.options.root, 'plans'), 20, notices),
+      recent<InstallEvidence>(join(this.options.root, 'installations'), 30, notices),
     ]);
     const active = new Set([...this.jobs.values()].map(x => x.view.run?.id));
     return { cwd: process.cwd(), runtimeVersion: RUNTIME_VERSION,
       jobs: [...this.jobs.values()].map(x => structuredClone(x.view)).reverse(),
+      mainEnvironment: this.options.installer?.target(),
+      installations: installations.map(x => x.status === 'running' && !this.options.installer?.isActive(x) ?
+        { ...x, status: 'interrupted', error: '安装进程已结束，请在插件管理中检查已安装的包，再重新生成安装预览。' } : x),
       history: history.map(x => x.status === 'running' && !active.has(x.id) && !runIsActive(x) ? { ...x, status: 'interrupted', error: '上次运行进程已结束，未保存最终结果。请检查详情中的临时目录。' } : x),
       presets: presets.filter(x => x.plan?.owner === 'web-ui').map(x => ({ name: x.name, task: x.plan.task })),
       plans: plans.filter(x => x.owner === 'web-ui'), notices: [...new Set(notices)] };
@@ -103,6 +113,20 @@ export class ComposeController {
         job.plan = plan;
         job.run = await runPlan(plan, { ...this.options, signal, mode: args.mode, keep: args.keep,
           onProgress: value => { job.run = value; } });
+      }));
+    }
+    if (args.action === 'previewInstall') {
+      if (!this.options.installer) throw new Error('请在 DSH 页面中使用主环境安装。');
+      const plan = await this.ownedPlan(args.planId);
+      if (plan.fingerprint !== args.fingerprint) throw new Error('方案已变化，请重新查看。');
+      return JSON.stringify(await this.options.installer.preview(plan));
+    }
+    if (args.action === 'install') {
+      const installer = this.options.installer;
+      if (!installer) throw new Error('请在 DSH 页面中使用主环境安装。');
+      installer.getPreview(args.previewId, 'web-ui');
+      return JSON.stringify(this.launch('install', async (signal, job) => {
+        job.install = await installer.install(args.previewId, 'web-ui', { signal, onProgress: value => { job.install = value; } });
       }));
     }
     if (args.action === 'cancel') {
