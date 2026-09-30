@@ -49,7 +49,7 @@
 
 - 集成模型使用本地 HTTP 替身，验证执行流程，不评价真实模型任务质量。未消耗付费模型额度。
 - 历史在线发现曾实际读取 npm 候选；本轮网络错误用受控替身注入。未执行第三方 PDF 插件的实际内容处理，也不把包说明当成功能验证。
-- 真实卸载在临时 Web profile 中完成；Desktop、Linux、macOS 与未来 DSH 版本未运行验证。CI 已配置，尚未在远程执行。
+- 真实卸载在临时 Web profile 中完成；Desktop、Linux、macOS 与未来 DSH 版本未运行验证。以下为拆分前记录；发布时的独立 CI 结果见文末。
 - 前端缺失文件、RPC 描述及本插件界面有检查；第三方旧图标、浏览器业务错误、会话格式迁移、原生模块崩溃不能通用自动修复。对应范围见[故障覆盖表](failure-matrix.md)。
 - 当前版本以两个独立仓库和 npm 包发布。用户现有 DSH profile、凭据与其他项目未修改。
 
@@ -58,3 +58,9 @@
 ## 独立仓库
 
 本仓库为 dsh-autocompose。另一插件及对应测试见 [dsh-compat-guardian](https://github.com/Han-1413141/dsh-compat-guardian)；两个仓库的共享检查测试有重叠，不将测试总数简单相加作为新增覆盖。
+
+## 0.2.0 发布验证
+
+独立仓库的 28 项测试通过；[Windows/Linux CI](https://github.com/Han-1413141/dsh-autocompose/actions/runs/36690680511) 均通过，验证提交为 `c232ca92ece591a743238d057cb3dd4bc4d5251f'。
+
+最终 npm 安装包已通过官方 CLI 安装并在真实 DSH Web 中加载，线上完整性值与本地测试文件一致。GitHub Release 附件与 npm 使用同一安装包。
