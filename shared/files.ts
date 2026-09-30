@@ -15,7 +15,16 @@ export async function atomicWrite(path: string, content: string): Promise<void> 
   const file = await open(temporary, 'wx', 0o600);
   try {
     await file.writeFile(content, 'utf8'); await file.sync(); await file.close();
-    await rename(temporary, path);
+    // Windows readers and scanners can briefly deny replacement of an open file.
+    // Retry only that transient condition, retaining the same complete temporary file.
+    for (let attempt = 0; ; attempt++) {
+      try { await rename(temporary, path); break; }
+      catch (error) {
+        if (process.platform !== 'win32' || attempt >= 6 ||
+          !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        await new Promise(done => setTimeout(done, 20 * 2 ** attempt));
+      }
+    }
   } catch (error) { await file.close().catch(() => {}); await rm(temporary, { force: true }); throw error; }
 }
 export const writeJson = (path: string, value: unknown) => atomicWrite(path, `${JSON.stringify(value, null, 2)}\n`);
