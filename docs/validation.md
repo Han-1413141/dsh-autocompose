@@ -64,3 +64,12 @@
 独立仓库的 28 项测试通过；[Windows/Linux CI](https://github.com/Han-1413141/dsh-autocompose/actions/runs/36690680511) 均通过，验证提交为 `c232ca92ece591a743238d057cb3dd4bc4d5251f`。
 
 最终 npm 安装包已通过官方 CLI 安装并在真实 DSH Web 中加载，线上完整性值与本地测试文件一致。GitHub Release 附件与 npm 使用同一安装包。
+
+## 0.2.1 安装修复验证
+
+2026-09-30：旧提交 `7f260e4` 在未授权构建脚本的临时 profile 中复现 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`。
+
+- 提交 `10600c00e438069fdd64b93ae5f6081d23ec0d83` 已包含编译文件，移除安装生命周期脚本；SDK 客户端随插件编译，运行时从当前 DSH 安装解析。
+- pnpm 11.21.0、全新独立 store、空 `allowBuilds`，不传 `--ignore-scripts`：直接从公开 GitHub 地址安装通过，入口文件与本地编译结果一致，CLI 帮助正常，profile 未额外安装整套 DSH。
+- 29 项测试、真实 SDK 的执行、取消和清理通过；最终 npm 安装包在真实 DSH Web 中加载为 `active`。模型仍使用本地 HTTP 替身。
+- [本次 Windows/Linux CI](https://github.com/Han-1413141/dsh-autocompose/actions/runs/36693866471) 全部通过，包括编译产物一致性与 Git 安装回归检查。
