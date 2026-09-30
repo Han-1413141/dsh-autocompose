@@ -61,6 +61,6 @@
 
 ## 0.2.0 发布验证
 
-独立仓库的 28 项测试通过；[Windows/Linux CI](https://github.com/Han-1413141/dsh-autocompose/actions/runs/36690680511) 均通过，验证提交为 `c232ca92ece591a743238d057cb3dd4bc4d5251f'。
+独立仓库的 28 项测试通过；[Windows/Linux CI](https://github.com/Han-1413141/dsh-autocompose/actions/runs/36690680511) 均通过，验证提交为 `c232ca92ece591a743238d057cb3dd4bc4d5251f`。
 
 最终 npm 安装包已通过官方 CLI 安装并在真实 DSH Web 中加载，线上完整性值与本地测试文件一致。GitHub Release 附件与 npm 使用同一安装包。
