@@ -22,7 +22,7 @@ Web 用户将 `desktop` 改成 `web`。也可在安装框中粘贴仓库地址 `
 
 如果仍出现 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，检查安装目标是否固定到了 0.2.0 的旧提交；改用上面的 npm 包名，或重新粘贴仓库地址。`Failed to replace env in config: ${NPM_TOKEN}` 是 npm 配置变量提示，与 Git 构建被拦截是两个问题；安装这两个公开包不需要 npm Token。
 
-安装后打开侧边栏“自组装”。独立 CLI 可通过 `npx --yes --package=dsh-autocompose@0.2.1 dsh-autocompose --help` 查看用法。任务执行需要 pnpm 和模型凭据，规划不调用模型。
+安装后打开侧边栏“自组装”。独立 CLI 可通过 `npx --yes --package=dsh-autocompose@0.2.1 dsh-autocompose --help` 查看用法。SDK 客户端已编译在插件中；任务执行复用现有 DSH `0.2.0-rc.2`，仍使用独立配置目录，并需要 pnpm 和模型凭据。安装插件不再下载另一套 DSH。规划不调用模型。
 
 [源码](https://github.com/Han-1413141/dsh-autocompose) · [问题反馈](https://github.com/Han-1413141/dsh-autocompose/issues) · [故障覆盖表](https://github.com/Han-1413141/dsh-autocompose/blob/master/docs/failure-matrix.md)
 
@@ -71,6 +71,8 @@ node lib/cli.js discover --capability pdf
 ```
 
 CLI 默认状态目录为当前目录下的 `.dsh-autocompose`；可用 `--root` 指定。`--cwd` 指定任务目录。所有操作都应保持同一状态目录。默认 provider 为 `deepseek-official`，模型为 `deepseek-v4-flash`，默认仅向子进程转发 `DEEPSEEK_API_KEY`，不复制原 DSH 凭据文件。自定义 provider 需要相应的子环境配置，单改模型名称不会自动复制宿主 provider。
+
+DSH 页面与工具自动使用宿主安装目录。通过 `npx` 单独执行任务时，使用 `--install-anchor <现有DSH安装中的package.json>` 指定运行时；缺少运行时或版本不匹配会给出错误，不会自动安装整套宿主。查看帮助、规划和发现插件无需该参数。
 
 `--timeout` 默认为 600000 毫秒。取消操作会关闭所拥有的 SDK 子进程；关闭无法确认时保留临时目录并报告错误。独立配置目录不是安全沙箱。
 

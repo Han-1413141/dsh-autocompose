@@ -4,6 +4,7 @@
 
 - 修复从 GitHub 地址安装时触发 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`。
 - 仓库包含编译后的插件与 Web 页面，取消 `prepack` 生命周期脚本；用户安装无需构建授权。
+- SDK 客户端随插件编译，执行时复用现有 DSH，避免传递安装整套宿主并触发 `ERR_PNPM_IGNORED_BUILDS`。独立 CLI 支持 `--install-anchor`。
 - 增加 Git 安装回归检查，补充 Desktop 安装方法与旧提交排障说明。
 
 ## 0.2.0 — 2026-09-30

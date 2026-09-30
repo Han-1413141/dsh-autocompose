@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, stat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { stringify } from 'yaml';
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
@@ -11,12 +10,13 @@ import { checkCompatibility } from '../shared/compatibility.ts';
 import type { ComposePlan } from './planner.ts';
 import { createPlan } from './planner.ts';
 import { inspectCandidate, RUNTIME_VERSION } from './catalog.ts';
+import { resolveRuntime } from './runtime.ts';
 
-const require = createRequire(import.meta.url);
 const activeRuns = new Set<string>();
-export const defaultDshBin = () => require.resolve('@deepseek-ai/dsh/lib/bin.js');
+export const defaultDshBin = (installAnchor?: string) => resolveRuntime(installAnchor).bin;
 export interface RunOptions {
   root: string;
+  installAnchor?: string;
   provider?: string;
   model?: string;
   timeoutMs?: number;
@@ -79,18 +79,20 @@ export async function runPlan(plan: ComposePlan, options: RunOptions): Promise<R
     activeRuns.add(id);
     try {
       await progress('preparing');
-      const env = { ...childEnvironment(options.envKeys ?? ['DEEPSEEK_API_KEY']), DSH_HOME: home };
+      const runtime = resolveRuntime(options.installAnchor);
+      const env = { ...childEnvironment(options.envKeys ?? ['DEEPSEEK_API_KEY']), DSH_HOME: home,
+        ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
       // The official CLI creates its own SDK profile and applies package resolution rules.
-      await runProcess(process.execPath, [defaultDshBin(), '--profile', 'sdk', '--dump-config'], { cwd: directory, env, signal });
+      await runProcess(process.execPath, [runtime.bin, '--profile', 'sdk', '--dump-config'], { cwd: directory, env, signal });
       for (const candidate of plan.selected.filter(x => x.source === 'npm')) {
         await progress('installing', candidate.name);
         const current = await inspectCandidate(candidate.name, candidate.version, candidate.capabilities, signal);
         if (current.integrity !== candidate.integrity || current.metadataHash !== candidate.metadataHash) throw new Error(`${candidate.name} 的元数据或制品已改变，请重新规划`);
-        await runProcess(process.execPath, [defaultDshBin(), 'plugin', '--profile', 'sdk', 'add',
+        await runProcess(process.execPath, [runtime.bin, 'plugin', '--profile', 'sdk', 'add',
           `${candidate.name}@${candidate.version}`, '--save-exact', '--ignore-scripts', '--registry=https://registry.npmjs.org'], { cwd: directory, env, signal });
       }
       await progress('checking');
-      const installed = await scanProfile(join(home, 'profiles', 'sdk'), require.resolve('@deepseek-ai/dsh/package.json'));
+      const installed = await scanProfile(join(home, 'profiles', 'sdk'), runtime.manifest);
       const report = checkCompatibility(installed, RUNTIME_VERSION);
       const failures = report.findings.filter(x => x.severity === 'error');
       if (failures.length) throw new Error(`实际安装后检查失败：${failures.map(x => x.message).join('; ')}`);
@@ -99,7 +101,7 @@ export async function runPlan(plan: ComposePlan, options: RunOptions): Promise<R
         { id: 'sandbox-policy', config: { mode: options.mode ?? 'read-only', workspaceRoot: plan.cwd } },
         { id: 'tool-plugin-manager', disabled: true },
       ]));
-      harness = new DeepSeekHarness({ dshBin: defaultDshBin(), profile: 'sdk', dshHome: home,
+      harness = new DeepSeekHarness({ dshBin: runtime.bin, profile: 'sdk', dshHome: home,
         cwd: plan.cwd, processCwd: directory, env, patches: [patch],
         provider: options.provider ?? 'deepseek-official', model: options.model ?? 'deepseek-v4-flash',
         initializeTimeoutMs: 30000, requestTimeoutMs: timeoutMs });

@@ -15,14 +15,15 @@ const help = `dsh-autocompose ${createRequire(import.meta.url)('../package.json'
   use-preset --preset <name> [--task "新任务"] --yes
 
 通用：--root <状态目录> --cwd <任务目录> --no-discovery（不补充搜索）
-运行：--provider <route> --model <id> --timeout <毫秒> --keep
-默认只读；独立配置目录不是操作系统沙箱。首次运行需已有 pnpm 和模型凭据。
+运行：--provider <route> --model <id> --timeout <毫秒> --keep --install-anchor <DSH安装中的package.json>
+默认只读；独立配置目录不是操作系统沙箱。执行需要已有 DSH 0.2.0-rc.2、pnpm 和模型凭据。
 只有 run/use-preset 会启动模型，--yes 表示确认计划中的安装、进程、网络与目录权限。`;
 async function main() {
   const { values: args, positionals } = parseArgs({ allowPositionals: true, options: {
     task: { type: 'string' }, catalog: { type: 'string' }, capabilities: { type: 'string' }, capability: { type: 'string' },
     root: { type: 'string' }, cwd: { type: 'string' }, id: { type: 'string' }, preset: { type: 'string' },
     provider: { type: 'string' }, model: { type: 'string' }, timeout: { type: 'string' },
+    'install-anchor': { type: 'string' },
     mode: { type: 'string' }, yes: { type: 'boolean' }, keep: { type: 'boolean' }, 'no-discovery': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
   } });
   const command = positionals[0];
@@ -43,7 +44,8 @@ async function main() {
       if (!args.yes) throw new Error('请先查看计划，再加 --yes 执行');
       if (args.mode && !['read-only', 'workspace-write'].includes(args.mode)) throw new Error('mode 必须是 read-only 或 workspace-write');
       const plan = command === 'run' ? await loadPlan(root, args.id ?? '') : await loadPreset(root, args.preset ?? '', args.task);
-      const result = await runPlan(plan, { root, provider: args.provider, model: args.model, timeoutMs: args.timeout ? Number(args.timeout) : undefined,
+      const result = await runPlan(plan, { root, installAnchor: args['install-anchor'] ? resolve(args['install-anchor']) : undefined,
+        provider: args.provider, model: args.model, timeoutMs: args.timeout ? Number(args.timeout) : undefined,
         keep: args.keep, mode: args.mode as 'read-only' | 'workspace-write' | undefined, signal: controller.signal });
       output = result;
       if (result.status !== 'completed' || result.cleanup === 'failed') process.exitCode = 1;

@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
+import type {} from '@deepseek-ai/dsh-app-boot';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { approve } from '../shared/approval.ts';
 import { discover } from './catalog.ts';
@@ -16,12 +17,13 @@ class AutocomposeUI extends TypertRemoteService {
 }
 
 export const name = 'dsh-autocompose';
-export const inject = ['tools', 'sandboxPolicy'];
+export const inject = ['tools', 'sandboxPolicy', 'profileContext'];
 export interface Config { root?: string; catalog?: string; provider?: string; model?: string; envKeys?: string[]; timeoutMs?: number; autoDiscover?: boolean }
 
 export function apply(ctx: Context, config: Config = {}): void {
   const root = resolve(config.root ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'autocompose'));
-  const controller = new ComposeController({ ...config, root });
+  const installAnchor = ctx.profileContext.installAnchor;
+  const controller = new ComposeController({ ...config, root, installAnchor });
   new AutocomposeUI(ctx, controller);
   ctx.effect(() => () => controller.dispose(), 'autocompose: browser jobs');
   const disposal = new AbortController();
@@ -52,7 +54,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (plan.owner !== owner) throw new Error('该计划属于另一个会话，请在当前会话重新规划');
       await approve(ctx, exec, 'autocompose operation', `${args.action}: ${plan.selected.map(x => `${x.name}@${x.version}`).join(', ')}; 权限 ${plan.permissions.join(', ')}; mode=${args.mode ?? 'read-only'}; workspace=${plan.cwd}; plan=${plan.fingerprint}`);
       if (args.action === 'save_preset') return JSON.stringify({ path: await savePreset(root, args.preset ?? '', plan) });
-      const promise = runPlan(plan, { root, provider: config.provider, model: config.model, envKeys: config.envKeys,
+      const promise = runPlan(plan, { root, installAnchor, provider: config.provider, model: config.model, envKeys: config.envKeys,
         timeoutMs: config.timeoutMs, signal, mode: args.mode });
       running.add(promise);
       try { return JSON.stringify(await promise); } finally { running.delete(promise); }
