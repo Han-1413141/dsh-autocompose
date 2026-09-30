@@ -17,10 +17,13 @@ jobs:
           cache: npm
       - uses: pnpm/action-setup@v4
         with:
-          version: '11.7.0'
+          version: '11.21.0'
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - run: git diff --exit-code -- lib
+      - run: npm run test:install
+        timeout-minutes: 5
       - run: npm run test:host
         timeout-minutes: 5

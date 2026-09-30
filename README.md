@@ -6,11 +6,23 @@
 
 ## 安装
 
-```powershell
-dsh plugin --profile web add dsh-autocompose@0.2.0 --save-exact --ignore-scripts
+在 DSH 插件管理页的安装框中输入以下包名：
+
+```text
+dsh-autocompose@0.2.1
 ```
 
-安装后打开侧边栏“自组装”。独立 CLI 可通过 `npx --yes --package=dsh-autocompose@0.2.0 dsh-autocompose --help` 查看用法。任务执行需要 pnpm 和模型凭据，规划不调用模型。
+Desktop 命令行安装：
+
+```powershell
+dsh plugin --profile desktop add dsh-autocompose@0.2.1 --save-exact --ignore-scripts
+```
+
+Web 用户将 `desktop` 改成 `web`。也可在安装框中粘贴仓库地址 `https://github.com/Han-1413141/dsh-autocompose`；从 0.2.1 起，仓库已包含编译后的 `lib/`，安装时无需构建，也无需添加 `allowBuilds`。
+
+如果仍出现 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，检查安装目标是否固定到了 0.2.0 的旧提交；改用上面的 npm 包名，或重新粘贴仓库地址。`Failed to replace env in config: ${NPM_TOKEN}` 是 npm 配置变量提示，与 Git 构建被拦截是两个问题；安装这两个公开包不需要 npm Token。
+
+安装后打开侧边栏“自组装”。独立 CLI 可通过 `npx --yes --package=dsh-autocompose@0.2.1 dsh-autocompose --help` 查看用法。任务执行需要 pnpm 和模型凭据，规划不调用模型。
 
 [源码](https://github.com/Han-1413141/dsh-autocompose) · [问题反馈](https://github.com/Han-1413141/dsh-autocompose/issues) · [故障覆盖表](https://github.com/Han-1413141/dsh-autocompose/blob/master/docs/failure-matrix.md)
 
@@ -110,6 +122,8 @@ npm run build
 npm run test:host
 npm run preview
 ```
+
+发布前运行 `npm run pack:release`。提交源码修改时同时提交重新生成的 `lib/`；CI 会核对产物与源码，并用禁止构建脚本的全新 profile 测试 Git 安装。
 
 配套插件：[dsh-compat-guardian](https://github.com/Han-1413141/dsh-compat-guardian)。两者可分别安装。
 

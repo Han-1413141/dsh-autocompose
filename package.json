@@ -1,6 +1,6 @@
 {
   "name": "dsh-autocompose",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Task-aware plugin selection and disposable DeepSeek Harness runtimes",
   "license": "MIT",
   "engines": {
@@ -92,7 +92,8 @@
     "test": "tsx --test tests/*.test.ts",
     "test:host": "node scripts/host-smoke.mjs",
     "preview": "node scripts/ui-host.mjs",
-    "prepack": "npm run build"
+    "pack:release": "npm run build && npm pack --ignore-scripts",
+    "test:install": "node scripts/install-smoke.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/dsh": "0.2.0-rc.2",
