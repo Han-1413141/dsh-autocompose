@@ -14,6 +14,7 @@ export async function apply(ctx) {
   // Only fixture metadata is substituted. Production always queries public npm; unit tests check exact specs and options.
   globalThis.fetch = async (input, options) => {
     const url = String(input);
+    if (url.startsWith('https://registry.npmjs.org/-/v1/search?')) return Response.json({ objects: fixture.fixtures.filter(x => x.key === 'math').map(x => ({ package: { ...x.manifest, keywords: ['mathematics', 'academic'] } })) });
     const found = fixture.fixtures.find(x => url === `https://registry.npmjs.org/${x.manifest.name}/${x.manifest.version}`);
     return found ? Response.json({ ...found.manifest, dist: { integrity: `sha512-local-fixture-${found.key}` } }) : originalFetch(input, options);
   };
@@ -78,6 +79,12 @@ async function exercise(ctx, fixture) {
   const rowResult = await installer.install(rowPreview.id, 'rows-test');
   assert.equal(rowResult.status, 'partial'); assert.match(rowResult.error, /安装后检查/);
   assert.equal((await ctx.pluginManager.listBundles()).find(x => x.name === rowFixture.name).enabled, false);
+  await request({ action: 'assemble', task: '我要进行数学研究', cwd: fixture.root, destination: 'main' });
+  const assembled = await finish();
+  assert.deepEqual(assembled.plan.capabilities, ['math', 'research']);
+  assert.equal(assembled.plan.discovery.length, 2);
+  assert.equal(assembled.install.status, 'completed');
+  assert.equal((await ctx.pluginManager.listPlugins()).find(x => x.moduleName === 'dsh-compose-fixture-math').fiberPhase, 'active');
   return { ok: true, installed, active: phases.map(x => ({ name: x.moduleName, phase: x.fiberPhase })),
-    reused: reused.items, conflict: conflict.blockers, upgraded, rowResult };
+    reused: reused.items, conflict: conflict.blockers, upgraded, rowResult, assembled };
 }

@@ -8,6 +8,7 @@ import type { RemoteResult, TypertRemoteContribution } from '@deepseek-ai/dsh-ty
 import { Component, useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { IconPluginPinwheelOutlineRegular, IconCheckCircleFillRegular } from '@deepseek-ai/dsh-client-ui-primitives';
 import css from './style.css';
+import { capabilityRules } from '../../src/capabilities.ts';
 
 export type Call = <T>(args: object) => Promise<T>;
 export interface PanelProps { call: Call }
@@ -75,5 +76,5 @@ export function useOverview<T>(call: Call, request: object, poll: (value: T) => 
 }
 
 export const date = (value: string) => new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-export const capabilityNames: Record<string, string> = { code: '代码分析', git: 'Git', web: '联网检索', shell: '终端', pdf: 'PDF', vision: '图像识别', browser: '浏览器', memory: '长期记忆' };
+export const capabilityNames: Record<string, string> = { ...Object.fromEntries(Object.entries(capabilityRules).map(([key, rule]) => [key, rule.label])), 'task-specific': '任务相关能力' };
 export const permissionNames: Record<string, string> = { 'workspace-read': '读取工作目录', 'workspace-write': '修改工作目录', network: '网络访问', process: '执行命令' };

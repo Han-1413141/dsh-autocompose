@@ -6,7 +6,8 @@ import { readJson } from '../shared/files.ts';
 import { parseRequest } from '../shared/rpc.ts';
 import { RUNTIME_VERSION } from './catalog.ts';
 import { loadPlan, savePlan, type ComposePlan } from './planner.ts';
-import { planTask } from './planning.ts';
+import { planTask, type PlanningProgress } from './planning.ts';
+import { WebEnvironments, type EnvironmentRecord } from './environments.ts';
 import { loadPreset, runIsActive, runPlan, savePreset, type RunEvidence, type RunOptions } from './runner.ts';
 import type { HostInstaller, InstallEvidence, MainEnvironment } from './host-install.ts';
 
@@ -24,10 +25,17 @@ const requests = z.discriminatedUnion('action', [
   z.object({ action: z.literal('getPlan'), planId: key }).strict(),
   z.object({ action: z.literal('previewInstall'), planId: key, fingerprint: z.string().length(64) }).strict(),
   z.object({ action: z.literal('install'), previewId: key }).strict(),
+  z.object({ action: z.literal('assemble'), task: z.string().trim().min(1).max(30000), cwd: z.string().min(1).max(4096),
+    destination: z.enum(['main', 'window']), mode: z.enum(['read-only', 'workspace-write']).default('read-only'), keep: z.boolean().default(true) }).strict(),
+  z.object({ action: z.literal('openEnvironment'), planId: key, fingerprint: z.string().length(64),
+    mode: z.enum(['read-only', 'workspace-write']), keep: z.boolean() }).strict(),
+  z.object({ action: z.literal('environmentUrl'), environmentId: key }).strict(),
+  z.object({ action: z.literal('closeEnvironment'), environmentId: key }).strict(),
 ]);
 export interface ComposeJob {
-  id: string; kind: 'plan' | 'run' | 'install'; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
+  id: string; kind: 'plan' | 'run' | 'install' | 'assemble' | 'environment'; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
   startedAt: string; plan?: ComposePlan; run?: RunEvidence; install?: InstallEvidence; error?: string;
+  planning?: PlanningProgress; environment?: EnvironmentRecord;
 }
 export interface ComposeOverview {
   cwd: string; runtimeVersion: string; jobs: ComposeJob[]; history: RunEvidence[];
@@ -35,6 +43,7 @@ export interface ComposeOverview {
   notices: string[];
   mainEnvironment?: MainEnvironment;
   installations: InstallEvidence[];
+  environments: EnvironmentRecord[];
 }
 interface Options extends Omit<RunOptions, 'signal' | 'onProgress'> { catalog?: string; autoDiscover?: boolean; installer?: HostInstaller }
 
@@ -56,7 +65,8 @@ async function recent<T>(directory: string, count: number, notices: string[]): P
 export class ComposeController {
   private jobs = new Map<string, { view: ComposeJob; abort: AbortController; promise: Promise<void> }>();
   private disposed = false;
-  constructor(readonly options: Options) {}
+  readonly environments: WebEnvironments;
+  constructor(readonly options: Options) { this.environments = new WebEnvironments(options); }
   private launch(kind: ComposeJob['kind'], work: (signal: AbortSignal, view: ComposeJob) => Promise<void>): ComposeJob {
     if (this.disposed) throw new Error('插件正在关闭');
     if ([...this.jobs.values()].some(x => ['running', 'cancelling'].includes(x.view.status))) throw new Error('已有任务正在处理，请等待完成或取消');
@@ -77,16 +87,19 @@ export class ComposeController {
   }
   async overview(): Promise<ComposeOverview> {
     const notices: string[] = [];
-    const [history, presets, plans, installations] = await Promise.all([
+    const [history, presets, plans, installations, environments] = await Promise.all([
       recent<RunEvidence>(join(this.options.root, 'history'), 30, notices),
       recent<{ name: string; plan: ComposePlan }>(join(this.options.root, 'presets'), 30, notices),
       recent<ComposePlan>(join(this.options.root, 'plans'), 20, notices),
       recent<InstallEvidence>(join(this.options.root, 'installations'), 30, notices),
+      recent<EnvironmentRecord>(join(this.options.root, 'environments'), 30, notices),
     ]);
     const active = new Set([...this.jobs.values()].map(x => x.view.run?.id));
     return { cwd: process.cwd(), runtimeVersion: RUNTIME_VERSION,
       jobs: [...this.jobs.values()].map(x => structuredClone(x.view)).reverse(),
       mainEnvironment: this.options.installer?.target(),
+      environments: environments.filter(x => x.owner === 'web-ui').map(x => ['starting', 'ready', 'closing'].includes(x.status) && !this.environments.active(x.id) ?
+        { ...x, status: 'interrupted', error: '宿主已重启，此窗口环境已停止。请从方案重新打开；原目录已保留。' } : x),
       installations: installations.map(x => x.status === 'running' && !this.options.installer?.isActive(x) ?
         { ...x, status: 'interrupted', error: '安装进程已结束，请在插件管理中检查已安装的包，再重新生成安装预览。' } : x),
       history: history.map(x => x.status === 'running' && !active.has(x.id) && !runIsActive(x) ? { ...x, status: 'interrupted', error: '上次运行进程已结束，未保存最终结果。请检查详情中的临时目录。' } : x),
@@ -97,13 +110,36 @@ export class ComposeController {
     const args = parseRequest(requests, payload);
     if (this.disposed) throw new Error('插件正在关闭');
     if (args.action === 'overview') return JSON.stringify(await this.overview());
-    if (args.action === 'plan') {
+    if (args.action === 'environmentUrl') return JSON.stringify({ url: this.environments.url(args.environmentId, 'web-ui') });
+    if (args.action === 'closeEnvironment') return JSON.stringify(await this.environments.close(args.environmentId, 'web-ui'));
+    if (args.action === 'plan' || args.action === 'assemble') {
       const cwd = resolve(args.cwd);
       if (!(await stat(cwd)).isDirectory()) throw new Error('请选择存在的工作目录');
-      return JSON.stringify(this.launch('plan', async (signal, job) => {
-        const plan = await planTask({ task: args.task, cwd, capabilities: args.capabilities, owner: 'web-ui',
-          catalog: this.options.catalog, autoDiscover: this.options.autoDiscover, signal });
+      return JSON.stringify(this.launch(args.action, async (signal, job) => {
+        const plan = await planTask({ task: args.task, cwd, capabilities: args.action === 'plan' ? args.capabilities : undefined, owner: 'web-ui',
+          catalog: this.options.catalog, autoDiscover: this.options.autoDiscover, signal, onProgress: value => { job.planning = value; } });
         signal.throwIfAborted(); await savePlan(this.options.root, plan); job.plan = plan;
+        job.planning = undefined;
+        if (args.action === 'assemble') {
+          if (plan.missing.length) throw new Error(`尚未找到兼容插件：${plan.missing.join('、')}。请查看搜索记录并补充任务关键词。`);
+          if (args.destination === 'window') {
+            job.environment = await this.environments.open(plan, { signal, mode: args.mode, keep: args.keep, onProgress: value => { job.environment = value; } });
+          } else {
+            const installer = this.options.installer;
+            if (!installer) throw new Error('请在 DSH 中使用主环境安装。');
+            const preview = await installer.preview(plan, signal);
+            if (preview.blockers.length) throw new Error(preview.blockers.join('；'));
+            job.install = await installer.install(preview.id, 'web-ui', { signal, onProgress: value => { job.install = value; } });
+          }
+        }
+      }));
+    }
+    if (args.action === 'openEnvironment') {
+      const plan = await this.ownedPlan(args.planId);
+      if (plan.fingerprint !== args.fingerprint) throw new Error('方案已变化，请重新生成。');
+      return JSON.stringify(this.launch('environment', async (signal, job) => {
+        job.plan = plan;
+        job.environment = await this.environments.open(plan, { signal, mode: args.mode, keep: args.keep, onProgress: value => { job.environment = value; } });
       }));
     }
     if (args.action === 'start') {
@@ -149,5 +185,6 @@ export class ComposeController {
     this.disposed = true;
     for (const job of this.jobs.values()) job.abort.abort();
     await Promise.allSettled([...this.jobs.values()].map(x => x.promise));
+    await this.environments.dispose();
   }
 }

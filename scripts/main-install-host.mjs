@@ -18,9 +18,10 @@ for (const [key, name, version, capabilities, extra, row] of [
   ['reader-next', 'dsh-compose-fixture-reader', '1.1.0', ['pdf'], { requires: { 'dsh-compose-fixture-helper': '^1.0.0' }, tools: ['compose-read-pdf'] }, 'compose-reader'],
   ['conflict', 'dsh-compose-fixture-conflict', '1.0.0', ['vision'], { tools: ['compose-read-pdf'] }, 'compose-conflict'],
   ['row-conflict', 'dsh-compose-fixture-row-conflict', '1.0.0', ['memory'], {}, 'compose-helper'],
+  ['math', 'dsh-compose-fixture-math', '1.0.0', ['math', 'research'], {}, 'compose-math'],
 ]) {
   const directory = join(root, key); await mkdir(directory);
-  const manifest = { name, version, type: 'module', main: 'index.js',
+  const manifest = { name, version, type: 'module', main: 'index.js', description: key === 'math' ? 'Mathematics and academic research' : key,
     dsh: { bundle: { patch: './cordis.patch.yml' } }, dshCompat: { dsh: '0.2.0-rc.2', capabilities, permissions: [], ...extra } };
   await writeFile(join(directory, 'package.json'), JSON.stringify(manifest));
   await writeFile(join(directory, 'index.js'), 'export function apply() {}\n');
@@ -29,11 +30,11 @@ for (const [key, name, version, capabilities, extra, row] of [
 }
 await writeFile(fixturePath, JSON.stringify({ root, reportPath, ui, fixtures }));
 const catalog = join(root, 'catalog.json');
-await writeFile(catalog, JSON.stringify({ schemaVersion: 1, plugins: fixtures.filter(x => x.key !== 'reader-next').map(x => ({
+await writeFile(catalog, JSON.stringify({ schemaVersion: 1, plugins: fixtures.filter(x => !['reader-next', 'math'].includes(x.key)).map(x => ({
   name: x.manifest.name, version: x.manifest.version, capabilities: x.manifest.dshCompat.capabilities })) }));
 const patch = join(root, 'test.patch.yml');
 await writeFile(patch, stringify([{ insert: [
-  { id: 'autocompose-main-test', name: resolve('lib/index.js'), config: { root: join(root, 'state'), autoDiscover: false, catalog } },
+  { id: 'autocompose-main-test', name: resolve('lib/index.js'), config: { root: join(root, 'state'), autoDiscover: true, catalog } },
   { id: 'main-install-observer', name: resolve('tests/fixtures/main-install-observer.mjs') },
 ] }]));
 const env = { ...process.env, DSH_HOME: join(root, 'home'), DSH_PRIMARY_RUNTIME: '', DSH_TELEMETRY_DISABLED: '1', DSH_AUTOCOMPOSE_FIXTURE: fixturePath };

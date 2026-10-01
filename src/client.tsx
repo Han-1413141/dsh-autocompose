@@ -42,13 +42,15 @@ function RunResult({ run }: { run: RunEvidence }) {
 }
 
 export function AutocomposePanel({ call }: PanelProps) {
-  const { value, error, refresh } = useOverview<ComposeOverview>(call, { action: 'overview' }, x => x.jobs.some(running));
+  const { value, error, refresh } = useOverview<ComposeOverview>(call, { action: 'overview' }, x => x.jobs.some(running) || x.environments.some(e => ['ready', 'closing'].includes(e.status)));
   const [operationError, setOperationError] = useState('');
   const [task, setTask] = useState(''), [cwd, setCwd] = useState('');
   const [plan, setPlan] = useState<ComposePlan>();
   const [busy, setBusy] = useState(false), [confirm, setConfirm] = useState(false);
   const [installPreview, setInstallPreview] = useState<InstallPreview>();
-  const [mode, setMode] = useState<'read-only' | 'workspace-write'>('read-only'), [keep, setKeep] = useState(false);
+  const [mode, setMode] = useState<'read-only' | 'workspace-write'>('read-only'), [keep, setKeep] = useState(true);
+  const [fallbackUrl, setFallbackUrl] = useState('');
+  const pendingWindow = useRef<{ jobId: string; popup: Window | null }>();
   const [preset, setPreset] = useState(''), [saveOpen, setSaveOpen] = useState(false), [notice, setNotice] = useState('');
   const [tab, setTab] = useState<'task' | 'history' | 'installations'>('task');
   const initialized = useRef(false), seenJob = useRef('');
@@ -57,47 +59,80 @@ export function AutocomposePanel({ call }: PanelProps) {
   useEffect(() => {
     if (!value) return;
     if (!initialized.current) { initialized.current = true; setCwd(value.cwd); }
-    const planned = value.jobs.find(x => x.kind === 'plan' && x.status === 'completed' && x.plan);
+    const planned = value.jobs.find(x => ['plan', 'assemble'].includes(x.kind) && !running(x) && x.plan);
     if (planned && planned.id !== seenJob.current) {
       seenJob.current = planned.id; setPlan(planned.plan); setTask(planned.plan!.task); setCwd(planned.plan!.cwd);
     }
+  }, [value]);
+  const reserveWindow = () => {
+    setFallbackUrl('');
+    const popup = window.open('about:blank', '_blank', 'popup,width=1240,height=860');
+    if (popup) { popup.document.title = '正在准备 DSH 环境'; popup.document.body.textContent = '正在查找插件并启动独立 DSH 环境。此窗口准备好后会自动进入对话界面。'; }
+    return popup;
+  };
+  const navigateWindow = async (id: string, popup: Window | null) => {
+    const { url } = await call<{ url: string }>({ action: 'environmentUrl', environmentId: id });
+    setFallbackUrl(url);
+    if (popup && !popup.closed) { popup.opener = null; popup.location.replace(url); }
+    else setNotice('环境已就绪。若浏览器拦截了弹窗，请点击“打开独立 DSH 界面”。');
+  };
+  useEffect(() => {
+    const pending = pendingWindow.current;
+    if (!pending || !value) return;
+    const job = value.jobs.find(x => x.id === pending.jobId);
+    if (!job || running(job)) return;
+    pendingWindow.current = undefined;
+    if (job.environment?.status === 'ready') void navigateWindow(job.environment.id, pending.popup).catch(cause => { pending.popup?.close(); setOperationError(String(cause)); });
+    else pending.popup?.close();
   }, [value]);
   const action = async (work: () => Promise<void>) => {
     setBusy(true); setOperationError(''); setNotice('');
     try { await work(); refresh(); } catch (cause) { setOperationError(String(cause)); setConfirm(false); setSaveOpen(false); setInstallPreview(undefined); } finally { setBusy(false); }
   };
   const selectPlan = (next: ComposePlan) => { setPlan(next); setTask(next.task); setCwd(next.cwd); setTab('task'); };
+  const startWindow = (request: object) => {
+    const popup = reserveWindow();
+    void action(async () => {
+      try { const job = await call<ComposeJob>(request); pendingWindow.current = { popup, jobId: job.id }; }
+      catch (error) { popup?.close(); throw error; }
+    });
+  };
   const canRun = !!plan && !plan.missing.length && !plan.report.findings.some(x => x.severity === 'error');
   const stage = active?.run?.stage ?? 'preparing';
   return <div className="dsh-kit"><main className="kit-content" aria-label="自组装工作台">
-    <header className="kit-header"><div><h1>自组装</h1><p className="kit-muted">描述任务，生成插件方案。可以临时运行，也可以安装到当前主环境。</p></div>
+    <header className="kit-header"><div><h1>自组装</h1><p className="kit-muted">描述任务，自动查找兼容插件。打开独立 DSH 窗口继续对话，或直接安装到当前主环境。</p></div>
       <div className="kit-actions"><Tag tone="neutral">DSH {value?.runtimeVersion ?? '…'}</Tag><Button variant="toolbar" aria-label="刷新自组装" title="刷新" icon={<IconRefreshOutlineRegular size={16} />} onClick={refresh} /></div></header>
     <nav className="kit-tabs" aria-label="自组装视图" role="tablist">{(['task', 'history', 'installations'] as const).map(x => <button key={x} role="tab" aria-selected={tab === x} onClick={() => setTab(x)}>{x === 'task' ? '生成方案' : x === 'history' ? '运行记录' : '安装记录'}</button>)}</nav>
     {error && <Notice tone="error">{error} <Button size="sm" onClick={refresh}>重试连接</Button></Notice>}
     {operationError && <Notice tone="error">{operationError}</Notice>}
     {notice && <Notice tone="success">{notice}</Notice>}
+    {fallbackUrl && <Notice><a href={fallbackUrl} target="_blank" rel="noreferrer">打开独立 DSH 界面 ↗</a><span className="kit-caption">新窗口保持运行，可随时回来重新打开。</span></Notice>}
     {value?.notices.map(x => <Notice key={x} tone="warning">{x}</Notice>)}
     {!value && !error && <Notice>正在读取任务和运行记录…</Notice>}
-    {active && <section className="kit-card kit-stack" aria-live="polite"><div className="kit-row"><div><h2>{active.status === 'cancelling' ? '正在等待当前操作结束' : active.kind === 'plan' ? '正在查找能力并检查兼容性' : active.kind === 'install' ? '正在安装到主环境' : stageLabels[stages.indexOf(stage)]}</h2><p className="kit-muted">{active.install?.currentPackage ?? active.run?.currentPackage ?? (active.kind === 'plan' ? '插件来自已配置目录和 npm 搜索结果。' : '切换页面后会继续处理，结果保存在对应记录中。')}</p></div><Button variant="outline" disabled={active.status === 'cancelling' || busy} onClick={() => void action(async () => { await call({ action: 'cancel', jobId: active.id }); })}>{active.kind === 'install' ? '停止安装' : '取消任务'}</Button></div><div className="kit-progress" />
+    {active && <section className="kit-card kit-stack" aria-live="polite"><div className="kit-row"><div><h2>{active.status === 'cancelling' ? '正在等待当前操作结束' : active.planning ? active.planning.message : active.environment ? active.environment.stage : active.install || active.kind === 'install' ? '正在安装到主环境' : active.kind === 'plan' || active.kind === 'assemble' ? '正在查找能力并检查兼容性' : stageLabels[stages.indexOf(stage)]}</h2><p className="kit-muted">{active.install?.currentPackage ?? active.environment?.currentPackage ?? active.run?.currentPackage ?? (active.planning ? `已核对 ${active.planning.checked} 个插件的发布元数据` : '切换页面后会继续处理，结果保存在对应记录中。')}</p></div><Button variant="outline" disabled={active.status === 'cancelling' || busy} onClick={() => void action(async () => { await call({ action: 'cancel', jobId: active.id }); })}>{active.install ? '停止安装' : '取消任务'}</Button></div><div className="kit-progress" />
       {active.kind === 'run' && <ol className="kit-steps">{stageLabels.slice(0, 5).map((x, i) => <li key={x} data-active={i <= stages.indexOf(stage)}>{x}</li>)}</ol>}</section>}
     {!active && latest?.error && <Notice tone={latest.status === 'cancelled' ? 'info' : 'error'}>{latest.status === 'cancelled' ? '任务已取消，可以调整后重试。' : latest.error}</Notice>}
+    {!!value?.environments.length && <section className="kit-card kit-stack" aria-label="独立 DSH 环境"><h2>独立 DSH 环境</h2><ul className="kit-list">{value.environments.slice(0, 5).map(environment => <li key={environment.id}><div className="kit-row"><div><strong>{environment.task}</strong><p className="kit-caption">{environment.status === 'ready' ? '运行中 · 支持持续对话' : environment.stage}</p></div>{environment.status === 'ready' && <div className="kit-actions"><Button variant="primary" size="sm" onClick={() => { const popup = reserveWindow(); void action(async () => navigateWindow(environment.id, popup)); }}>重新打开</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => void action(async () => { await call({ action: 'closeEnvironment', environmentId: environment.id }); setFallbackUrl(''); })}>关闭环境</Button></div>}</div>{environment.warning && <Notice tone="warning">{environment.warning}</Notice>}{environment.error && <Notice tone="error">{environment.error}</Notice>}<details><summary>插件与保存位置</summary><p className="kit-break">{environment.directory}</p><p className="kit-caption">{environment.packages.map(x => `${x.name}@${x.version}`).join(' · ')}</p><p className="kit-caption">{environment.keep ? '关闭环境后保留文件和会话。' : '关闭环境后清理临时文件和会话。'}</p></details></li>)}</ul><p className="kit-caption">关闭浏览器窗口不会停止环境；点击“关闭环境”才结束进程。退出主 DSH 时会停止独立环境并保留文件。</p></section>}
     {tab === 'task' ? <>
       <section className="kit-card kit-stack"><div className="kit-row"><h2>描述你要完成的任务</h2><span className="kit-caption">1 / 选择能力</span></div>
         <label className="kit-field"><span className="kit-caption">任务</span><textarea value={task} disabled={locked} maxLength={30000} placeholder="例如：检查这个项目的代码，整理需要改进的地方，并生成一份报告。" onChange={e => { setTask(e.target.value); setPlan(undefined); }} /></label>
-        <div className="kit-chips">{['检查代码和 Git 变更', '联网查找项目的官方文档', '读取 PDF 并提取关键内容'].map(x => <button className="kit-example" disabled={locked} key={x} onClick={() => { setTask(x); setPlan(undefined); }}>{x}</button>)}</div>
+        <div className="kit-chips">{['我要进行数学研究', '读取 PDF 并提取关键内容', '检查代码和 Git 变更'].map(x => <button className="kit-example" disabled={locked} key={x} onClick={() => { setTask(x); setPlan(undefined); }}>{x}</button>)}</div>
         <div className="kit-grid"><label className="kit-field"><span>工作目录</span><Input value={cwd} disabled={locked} placeholder="任务文件所在文件夹的完整路径" onChange={e => { setCwd(e.target.value); setPlan(undefined); }} /></label>
           <label className="kit-field"><span>复用插件预设</span><select aria-label="选择预设" disabled={locked} value="" onChange={e => { const name = e.target.value; if (name) void action(async () => selectPlan(await call<ComposePlan>({ action: 'loadPreset', name }))); }}><option value="">{value?.presets.length ? '选择已保存的预设' : '暂无预设，生成方案后可保存'}</option>{value?.presets.map(x => <option key={x.name} value={x.name}>{x.name}</option>)}</select></label></div>
-        <div className="kit-row"><span className="kit-caption">生成方案不调用模型，也不安装插件。</span><Button variant="primary" disabled={locked || !task.trim() || !cwd.trim() || !value} icon={<IconPluginPinwheelOutlineRegular size={16} />} onClick={() => void action(async () => { setPlan(undefined); await call({ action: 'plan', task, cwd }); })}>生成方案</Button></div>
+        <div className="kit-actions"><Button variant="primary" disabled={locked || !task.trim() || !cwd.trim() || !value} icon={<IconPluginPinwheelOutlineRegular size={16} />} onClick={() => startWindow({ action: 'assemble', task, cwd, destination: 'window', mode, keep })}>自动组装并打开窗口</Button><Button variant="outline" disabled={locked || !task.trim() || !cwd.trim() || !value?.mainEnvironment} onClick={() => void action(async () => { setPlan(undefined); await call({ action: 'assemble', task, cwd, destination: 'main' }); })}>自动查找并安装到主环境</Button><Button disabled={locked || !task.trim() || !cwd.trim() || !value} onClick={() => void action(async () => { setPlan(undefined); await call({ action: 'plan', task, cwd }); })}>仅生成方案</Button></div>
+        <p className="kit-caption">自动操作会查找、检查并安装匹配的第三方插件。窗口模式使用独立环境并提交本次任务；主环境模式会新增、启用或替换插件，安装后持续保留。仅生成方案不安装插件。</p>
+        <div className="kit-actions"><label>窗口目录权限 <select aria-label="窗口目录权限" value={mode} disabled={locked} onChange={e => setMode(e.target.value as typeof mode)}><option value="read-only">只读</option><option value="workspace-write">允许修改</option></select></label><label><input type="checkbox" checked={keep} disabled={locked} onChange={e => setKeep(e.target.checked)} />关闭窗口环境后保留文件与会话</label></div>
       </section>
       {plan ? <section className="kit-card kit-stack" aria-label="插件方案"><div className="kit-row"><h2>插件方案</h2><Tag tone={canRun ? 'success' : 'warning'}>{canRun ? '可以运行' : '需要调整'}</Tag></div>
         <div className="kit-chips">{plan.capabilities.map(x => <Tag key={x} tone="info">{capabilityNames[x] ?? x}</Tag>)}</div>
+        {!!plan.discovery?.length && <div className="kit-small-stack"><h3>搜索记录</h3>{plan.discovery.map(x => <p className="kit-caption" key={x.capability}>{capabilityNames[x.capability] ?? x.capability} · 关键词 {x.query} · 核对 {x.checked} 个候选 · {x.error ? `搜索失败：${x.error}` : `元数据通过 ${x.accepted.length} 个`}</p>)}</div>}
         <ul className="kit-list">{plan.selected.map(x => <li key={x.name}><div className="kit-row"><span className="kit-package">{x.name}<span className="kit-version">{x.version}</span></span><Tag tone={x.source === 'builtin' ? 'neutral' : 'outline'}>{x.source === 'builtin' ? '官方基础能力' : x.capabilitySource === 'search' ? '搜索候选' : '第三方插件'}</Tag></div><p className="kit-muted">{x.capabilities.map(c => capabilityNames[c] ?? c).join(' · ') || '提供前置依赖'}</p></li>)}</ul>
         {!!plan.missing.length && <Notice tone="warning">尚未找到可用的{plan.missing.map(x => capabilityNames[x] ?? x).join('、')}插件。可修改任务，或在插件配置中添加候选目录后重新生成。</Notice>}
         {plan.report.findings.map((x, i) => <Notice key={i} tone={x.severity === 'error' ? 'error' : 'warning'}>{x.message}</Notice>)}
         {plan.selected.some(x => x.capabilitySource === 'search') && <Notice tone="warning">搜索候选的能力来自包说明，实际效果需要运行验证。请确认你信任这些插件。</Notice>}
         <details><summary>选择依据与权限声明</summary><div className="kit-small-stack">{plan.explanation.map((x, i) => <p className="kit-muted" key={i}>{x}</p>)}<div className="kit-chips">{plan.permissions.map(x => <Tag key={x}>{permissionNames[x] ?? x}</Tag>)}</div></div></details>
-        <div className="kit-grid kit-choices"><section className="kit-small-stack"><h3>临时运行</h3><p className="kit-muted">在独立环境中安装插件并执行这次任务，结束后按设置清理。</p><label className="kit-field"><span>任务目录权限</span><select value={mode} disabled={locked} onChange={e => setMode(e.target.value as typeof mode)}><option value="read-only">只读 · 用于检查和分析</option><option value="workspace-write">允许修改 · 用于开发和修复</option></select></label><label className="kit-actions"><input type="checkbox" checked={keep} disabled={locked} onChange={e => setKeep(e.target.checked)} />保留临时环境</label><Button variant="primary" disabled={locked || !canRun} onClick={() => setConfirm(true)}>检查并运行</Button></section>
-          <section className="kit-small-stack"><h3>安装到主环境</h3><p className="kit-muted">将插件保留在当前 {value?.mainEnvironment?.profile ?? 'DSH'} 环境中，供后续任务使用。安装本身不执行任务。</p>{!plan.selected.some(x => x.source === 'npm') && <p className="kit-caption">方案只使用官方基础能力，无需额外安装。</p>}<Button variant="outline" disabled={locked || !canRun || !value?.mainEnvironment || !plan.selected.some(x => x.source === 'npm')} onClick={() => void action(async () => setInstallPreview(await call<InstallPreview>({ action: 'previewInstall', planId: plan.id, fingerprint: plan.fingerprint })))}>安装到主环境</Button></section></div>
+        <div className="kit-grid kit-choices"><section className="kit-small-stack"><h3>独立 DSH 窗口</h3><p className="kit-muted">安装方案中的插件，在新窗口执行任务并继续对话。目录权限与保留选项使用上方设置。</p><Button variant="primary" disabled={locked || !canRun} onClick={() => startWindow({ action: 'openEnvironment', planId: plan.id, fingerprint: plan.fingerprint, mode, keep })}>打开独立窗口</Button><Button variant="outline" disabled={locked || !canRun} onClick={() => setConfirm(true)}>后台执行一次</Button></section>
+          <section className="kit-small-stack"><h3>安装到主环境</h3><p className="kit-muted">将插件保留在当前 {value?.mainEnvironment?.profile ?? 'DSH'} 环境中，供后续任务使用。安装本身不执行任务。</p>{canRun && !plan.selected.some(x => x.source === 'npm') && <p className="kit-caption">方案只使用官方基础能力，无需额外安装。</p>}<Button variant="outline" disabled={locked || !canRun || !value?.mainEnvironment || !plan.selected.some(x => x.source === 'npm')} onClick={() => void action(async () => setInstallPreview(await call<InstallPreview>({ action: 'previewInstall', planId: plan.id, fingerprint: plan.fingerprint })))}>安装到主环境</Button></section></div>
         <div><Button variant="outline" disabled={locked || !canRun} onClick={() => setSaveOpen(true)}>保存为预设</Button></div>
       </section> : <Empty title="让插件适应你的任务">生成方案后，这里会显示所需插件、能力覆盖和兼容检查结果。</Empty>}
       {!active && latest?.run && <section className="kit-card kit-stack"><h2>最近一次结果</h2><RunResult run={latest.run} /></section>}

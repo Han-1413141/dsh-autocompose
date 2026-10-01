@@ -7,20 +7,8 @@ import { compatMetadata } from '../shared/validation.ts';
 import type { Candidate } from './catalog.ts';
 import type { CompatibilityReport, PluginRecord } from '../shared/types.ts';
 
-const patterns: Record<string, RegExp> = {
-  pdf: /\bpdf\b|扫描件|扫描文档/iu,
-  web: /\b(web|search|browse|online|latest|documentation)\b|联网|搜索|检索|查.{0,5}资料|最新|网页|官方文档/iu,
-  code: /\b(code|repo|repository|debug|refactor|typescript|python)\b|代码|仓库|调试|重构|编程|项目/iu,
-  git: /\bgit\b|\bcommit\b|\bbranch\b|分支|提交|合并/iu,
-  browser: /\b(browser|playwright|puppeteer)\b|浏览器|点击网页|表单/iu,
-  vision: /\b(vision|image|ocr)\b|识图|图片|图像|截图/iu,
-  memory: /\bmemory\b|长期记忆|跨会话记忆/iu,
-  shell: /\b(shell|terminal|command)\b|终端|命令行/iu,
-};
-export function inferCapabilities(task: string): string[] {
-  if (!task.trim() || task.length > 30000) throw new Error('任务需要 1–30000 个字符');
-  return Object.entries(patterns).filter(([, regex]) => regex.test(task)).map(([key]) => key);
-}
+import { inferCapabilities } from './capabilities.ts';
+export { inferCapabilities } from './capabilities.ts';
 export interface ComposePlan {
   schemaVersion: 1;
   id: string;
@@ -35,6 +23,7 @@ export interface ComposePlan {
   permissions: string[];
   report: CompatibilityReport;
   explanation: string[];
+  discovery?: { capability: string; query: string; checked: number; accepted: string[]; error?: string }[];
   fingerprint: string;
 }
 export function candidateRecord(candidate: Candidate): PluginRecord {
@@ -79,7 +68,8 @@ export function createPlan(input: { task: string; cwd: string; runtimeVersion: s
       const report = checkCompatibility([...selected, ...values].map(candidateRecord), input.runtimeVersion);
       if (report.findings.some(x => x.severity === 'error')) { rejected.add(key); explanation.push(`${key} 因兼容性或依赖问题被排除。`); continue; }
       const penalty = new Set(values.flatMap(x => x.permissions)).size;
-      alternatives.push({ group: values, score: gained * 100 - values.length * 10 - penalty, key });
+      const relevance = Math.min(8, Math.max(...values.map(x => x.relevance ?? 0)));
+      alternatives.push({ group: values, score: gained * 100 - values.length * 10 - penalty + relevance, key });
     }
     alternatives.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
     if (!alternatives.length) break;

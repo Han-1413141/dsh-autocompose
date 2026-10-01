@@ -19,8 +19,8 @@
 | --- | --- | --- |
 | `root` | `$DSH_HOME/autocompose` | 保存记录、备份与临时运行环境 |
 | `catalog` | 未设置 | 固定候选目录 JSON 文件路径 |
-| `autoDiscover` | `true` | 能力不足时补充查询 npm 候选 |
-| `timeoutMs` | `600000` | 单次临时任务超时，单位毫秒，范围 `1000`–`7200000` |
+| `autoDiscover` | `true` | 能力不足时查询 npm；陌生任务使用原文搜索 |
+| `timeoutMs` | `600000` | 后台任务或独立窗口准备阶段的超时，单位毫秒，范围 `1000`–`7200000`；已就绪窗口持续运行 |
 | `provider` | `deepseek-official` | 临时运行使用的 provider |
 | `model` | `deepseek-v4-flash` | 临时运行使用的模型 |
 | `envKeys` | `[DEEPSEEK_API_KEY]` | 在基础环境变量之外额外转发的变量名，填写名称而非凭据值 |
@@ -29,11 +29,11 @@
 
 ## 模型与凭据
 
-生成方案、发现插件和安装到主环境都不调用模型。临时运行通过官方 SDK 启动独立子进程，复用现有 DSH `0.2.0-rc.2` 的程序文件，同时使用独立的 `DSH_HOME` 与 `sdk` profile。
+生成方案、发现插件和安装到主环境都不调用模型。后台一次性任务通过官方 SDK 启动 `sdk` profile；独立窗口启动 DSH 原生 `web` profile，并将输入的任务提交到一个可继续对话的会话中。两者均复用现有 DSH `0.2.0-rc.2` 的程序文件，使用独立的 `DSH_HOME`。
 
 默认 provider 读取 `DEEPSEEK_API_KEY`。该变量必须存在于启动宿主的进程环境中，才能转发给子进程；只在另一个终端中设置变量，不会改变已经运行的 Desktop 进程。AutoCompose 不复制原 DSH 的凭据文件或登录状态。
 
-`provider` 和 `model` 只选择本次临时环境中实际存在的 provider 与模型。每次运行都会新建环境，当前没有导入宿主 provider 配置或指定已有临时环境的选项。没有可用模型时，仍可生成方案和安装到主环境。
+`provider` 和 `model` 选择独立环境中实际存在的 provider 与模型。独立窗口缺少模型凭据时，可以在其 DSH 设置中配置，然后继续对话；主环境的自定义 provider 不会自动复制。每次启动创建新环境，正在运行的环境可重新打开；已关闭的保留目录目前不能直接恢复运行。没有可用模型时，仍可生成方案和安装到主环境。
 
 任务目录的只读或允许修改模式通过 DSH 工具权限控制；独立配置目录不等于操作系统安全沙箱。
 
@@ -54,14 +54,16 @@
 
 严格限定候选范围时，设置 `autoDiscover: false`，或传入 CLI 的 `--no-discovery`。这会关闭补充搜索，仍会读取固定目录中指定 npm 包的元数据。未提供目录且关闭发现时，只使用内置能力，规划过程不联网。
 
-任务识别使用中文和英文关键词，支持 `pdf / web / code / git / browser / vision / memory / shell`。CLI 的 `--capabilities` 和 DSH 工具的 `capabilities` 可以覆盖关键词推断。自动发现最多搜索四种缺失能力，每种能力最多检查五个候选；搜索说明不等于功能验证。
+任务识别支持 `pdf / web / code / git / browser / vision / memory / shell / math / research / latex / data-analysis / spreadsheet / writing / presentation`。例如“我要进行数学研究”会搜索 `math` 和 `research`。无法识别的任务按原文搜索，找不到时保留 `task-specific` 缺项。CLI 的 `--capabilities` 和 DSH 工具的 `capabilities` 可以覆盖推断。
+
+自动发现最多搜索六种缺失能力，每种从 npm 的 `dsh-plugin` 和 `deepseek-harness` 标签查询候选，最多检查八个精确版本；相同包只读取一次。过滤无关说明、插件市场、缺少 DSH bundle 的包，并在规划时排除已知版本冲突。候选未声明能力时会根据精确版本说明推断，页面明确标为“搜索候选”。只发布在 GitHub、未发布 npm 包的插件暂不在自动安装范围内。
 
 ## 命令行
 
 查看已发布版本的帮助：
 
 ```powershell
-npx --yes --package=dsh-autocompose@0.3.0 dsh-autocompose --help
+npx --yes --package=dsh-autocompose@0.4.0 dsh-autocompose --help
 ```
 
 以下命令在源码仓库中运行，先执行 `npm ci --ignore-scripts` 与 `npm run build`：
@@ -97,8 +99,10 @@ DSH 页面与工具自动使用宿主安装目录。单独通过 `npx` 执行任
 
 | `action` | 主要参数 | 结果 |
 | --- | --- | --- |
+| `assemble` | `task`，可选 `capabilities`、`destination`、`mode` | 自动搜索、规划并经 DSH 批准安装。默认 `destination: main`；`window` 创建可继续对话的独立环境，返回环境记录和打开链接 |
+| `close_environment` | `environmentId` | 停止当前会话创建的独立环境，保留文件 |
 | `plan` | `task`，可选 `capabilities` | 返回方案，其中 `id` 在后续调用中作为 `planId` |
-| `discover` | `task` 填写英文能力名 | 返回候选，不安装 |
+| `discover` | `task` 填写中英文关键词 | 返回候选，不安装 |
 | `run` | `planId`，可选 `mode` | 批准后在临时环境执行任务 |
 | `save_preset` | `planId`、`preset` | 批准后保存精确版本组合 |
 | `install_preview` | `planId` | 返回目标环境、逐项变更和兼容性结果；返回的 `id` 在安装时作为 `previewId` |
@@ -115,10 +119,13 @@ DSH 页面与工具自动使用宿主安装目录。单独通过 `npx` 执行任
 | `plans` | 任务、工作目录、插件版本和方案指纹 |
 | `presets` | 可复用的固定版本组合 |
 | `history` | 临时运行结果、阶段和清理状态 |
+| `environments` | 独立窗口的状态、插件、会话与目录；不保存访问令牌 |
 | `runs` | 正在使用或主动保留的临时环境 |
 | `installations` | 主环境安装进度、每个插件的状态和重启要求 |
 | `install-backups` | 主环境变更前的包清单、锁文件和配置文本 |
 
 安装备份只保存相关配置文件，不包含插件代码或整个 DSH 目录，也不自动整体回滚成功的安装。配置文件中可能包含私有内容，排障时不要直接把备份公开上传。
 
-正常结束的临时环境默认删除；主动保留、清理失败或无法确认子进程退出时会保留目录并记录原因。主环境中已经成功安装的插件持续保留，可在 DSH 插件管理中停用或卸载。安装中断后重新预览，会依据当时实际状态区分新增、版本替换、启用与复用。
+CLI 的后台临时环境默认删除，传入 `--keep` 后保留。清理失败或无法确认子进程退出时会保留目录并记录原因。主环境中已经成功安装的插件持续保留，可在 DSH 插件管理中停用或卸载。安装中断后重新预览，会依据当时实际状态区分新增、版本替换、启用与复用。
+
+页面默认勾选保留文件与会话；取消后，在“关闭环境”或后台任务结束时清理。退出宿主时停止其独立窗口进程并保留目录。浏览器页面关闭不会停止独立环境，可以通过“重新打开”继续访问；访问链接只在当前进程有效。

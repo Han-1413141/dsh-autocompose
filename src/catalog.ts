@@ -13,6 +13,8 @@ export interface Candidate {
   integrity?: string;
   metadataHash?: string;
   capabilitySource?: 'builtin' | 'catalog' | 'manifest' | 'search';
+  keywords?: string[];
+  relevance?: number;
 }
 export const RUNTIME_VERSION = '0.2.0-rc.2';
 export const registryUrl = 'https://registry.npmjs.org';
@@ -51,20 +53,29 @@ export async function inspectCandidate(name: string, exactVersion: string, capab
   return { name, version: exactVersion, capabilities: capabilities ?? meta.capabilities ?? [],
     permissions: meta.permissions ?? ['host-code: filesystem, network, processes'],
     description: data.description ?? name, source: 'npm', manifest, integrity, capabilitySource: capabilities ? 'catalog' : 'manifest',
+    keywords: Array.isArray(data.keywords) ? data.keywords.filter((x): x is string => typeof x === 'string') : [],
     metadataHash: digest(JSON.stringify(manifest)) };
 }
 
 /** Discovery returns suggestions; planning inspects exact metadata before selecting any candidate. */
-export interface SearchSuggestion { name: string; version: string; description: string; links: unknown; status: string }
+export interface SearchSuggestion { name: string; version: string; description: string; keywords: string[]; links: unknown; status: string }
 export async function discover(capability: string, signal?: AbortSignal): Promise<SearchSuggestion[]> {
-  if (!/^[a-z][a-z0-9-]{0,40}$/.test(capability)) throw new Error('能力名称须为英文单词或短横线组合');
-  const result = await registryJson(`-/v1/search?text=${encodeURIComponent(`keywords:dsh-plugin ${capability}`)}&size=12`, signal);
-  if (!Array.isArray(result.objects)) return [];
-  return result.objects.map(item => {
-    const pkg = object(object(item, 'search item').package, 'package');
-    return { name: string(pkg.name, 'name'), version: string(pkg.version, 'version'), description: typeof pkg.description === 'string' ? pkg.description : '',
-      links: pkg.links, status: '搜索建议；需核验元数据和安装计划' };
-  });
+  if (!/^[\p{L}\p{N}][\p{L}\p{N}\s-]{0,159}$/u.test(capability.trim())) throw new Error('搜索关键词需为 1–160 个中英文、数字、空格或短横线');
+  const results = await Promise.allSettled(['keywords:dsh-plugin', 'keywords:deepseek-harness'].map(scope =>
+    registryJson(`-/v1/search?text=${encodeURIComponent(`${scope} ${capability.trim()}`)}&size=20`, signal)));
+  signal?.throwIfAborted();
+  if (results.every(x => x.status === 'rejected')) throw new Error(results.map(x => x.status === 'rejected' ? String(x.reason) : '').join('；'));
+  const unique = new Map<string, SearchSuggestion>();
+  for (const result of results) {
+    if (result.status !== 'fulfilled' || !Array.isArray(result.value.objects)) continue;
+    for (const item of result.value.objects) {
+      const pkg = object(object(item, 'search item').package, 'package');
+      const suggestion = { name: string(pkg.name, 'name'), version: string(pkg.version, 'version'), description: typeof pkg.description === 'string' ? pkg.description : '',
+        keywords: Array.isArray(pkg.keywords) ? pkg.keywords.filter((x): x is string => typeof x === 'string') : [], links: pkg.links, status: '搜索建议；需核验元数据和安装计划' };
+      unique.set(`${suggestion.name}@${suggestion.version}`, suggestion);
+    }
+  }
+  return [...unique.values()];
 }
 
 export async function loadCatalog(path?: string, signal?: AbortSignal): Promise<Candidate[]> {
