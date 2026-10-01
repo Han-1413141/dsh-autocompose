@@ -1,6 +1,6 @@
 {
   "name": "dsh-autocompose",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Task-based plugin plans, disposable runs and installation into your current DeepSeek Harness environment",
   "license": "MIT",
   "engines": {
@@ -103,7 +103,8 @@
     "pack:release": "npm run build && npm pack --ignore-scripts",
     "test:install": "node scripts/install-smoke.mjs",
     "test:main-install": "node scripts/main-install-host.mjs",
-    "test:window": "node scripts/window-smoke.mjs"
+    "test:window": "node scripts/window-smoke.mjs",
+    "test:desktop": "node scripts/desktop-smoke.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/dsh": "0.2.0-rc.2",

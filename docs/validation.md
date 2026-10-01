@@ -1,5 +1,20 @@
 # 验证记录
 
+## 0.5.0 独立桌面客户端
+
+2026-10-01，Windows / Node.js 24.19.0 / 官方 DSH Desktop 0.2.0-rc.2：
+
+- TypeScript、构建和 47 项测试通过。新增客户端选择、缺失安装、路径与环境变量隔离检查。
+- `test:desktop` 实际启动本机官方客户端，与日常主客户端同时运行。验证独立 `desktop` profile、初始任务进入本地模型、后台持续运行及重新唤回同一进程。
+- 通过客户端自带 CLI 安装无业务逻辑的本地测试插件，确认其在独立客户端中实际加载。
+- 同时启动两个独立客户端，验证进程和目录不同；关闭其中一个后，另一个仍然运行。独立 profile 使用动态端口，修复默认端口 19387 被主客户端占用的问题。
+- 验证跨会话操作拒绝、取消启动、停止进程和删除自有临时目录。所有测试使用本地固定回复模型，没有调用付费模型。
+- 原有 Web 窗口集成检查通过，保留 Web 宿主的初始对话、继续运行和清理行为。
+
+本次验证确认官方客户端进程与 Host 的实际行为，没有进行原生窗口的截图或视觉验收。macOS 客户端尚未实测；下方 0.4.0 的截图仍是 Web 界面。
+
+实现依据是官方 [DSH Desktop 窗口与单实例逻辑](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/src/main.ts) 及 Electron 的[客户端数据目录启动参数](https://github.com/electron/electron/blob/main/shell/app/electron_main_delegate.cc)。不修改客户端安装文件。
+
 ## 0.4.0 自动组装与独立窗口
 
 2026-10-01，Windows / Node.js 24.19.0 / DSH 0.2.0-rc.2：

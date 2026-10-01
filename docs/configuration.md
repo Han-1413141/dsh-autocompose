@@ -21,15 +21,34 @@
 | `catalog` | 未设置 | 固定候选目录 JSON 文件路径 |
 | `autoDiscover` | `true` | 能力不足时查询 npm；陌生任务使用原文搜索 |
 | `timeoutMs` | `600000` | 后台任务或独立窗口准备阶段的超时，单位毫秒，范围 `1000`–`7200000`；已就绪窗口持续运行 |
+| `windowMode` | `auto` | Desktop 宿主打开客户端，Web 宿主打开网页；可指定 `desktop` 或 `web` |
+| `desktopExecutable` | 当前 Desktop 程序 | 从 Web 宿主启动客户端时，填写官方 DSH 可执行文件的完整路径 |
 | `provider` | `deepseek-official` | 临时运行使用的 provider |
 | `model` | `deepseek-v4-flash` | 临时运行使用的模型 |
 | `envKeys` | `[DEEPSEEK_API_KEY]` | 在基础环境变量之外额外转发的变量名，填写名称而非凭据值 |
 
 `root` 控制 AutoCompose 的数据目录，包括记录、备份和临时运行环境。主环境安装始终使用当前宿主提供的 profile 目录，不通过配置或浏览器参数选择另一个安装目标。
 
+## 客户端窗口
+
+在官方 DSH Desktop 中无需额外配置。默认 `windowMode: auto` 会复用当前客户端的可执行文件，清除子进程的 Electron Node 模式，并使用各自的 `DSH_HOME`、`desktop-data` 目录和动态端口。
+
+从 Web 宿主打开本机客户端时，填写实际安装路径：
+
+```yaml
+- id: autocompose
+  config:
+    windowMode: desktop
+    desktopExecutable: C:/实际安装目录/DeepSeek Harness.exe
+```
+
+macOS 填写 `.app/Contents/MacOS/` 下的可执行文件，而非 `.app` 目录。Windows 官方客户端已做实际集成验证；macOS 客户端尚未实测。指定 `desktop` 后，找不到客户端或版本不符会报错，不会退回网页。客户端必须与本插件适配的 DSH 版本一致。
+
+右上角关闭按钮遵循 DSH 的托盘行为；“重新打开”通过相同的客户端数据目录唤回对应实例，不会创建重复环境。“关闭环境”停止它及其子进程。独立客户端退出后，当前记录不再提供唤回入口。
+
 ## 模型与凭据
 
-生成方案、发现插件和安装到主环境都不调用模型。后台一次性任务通过官方 SDK 启动 `sdk` profile；独立窗口启动 DSH 原生 `web` profile，并将输入的任务提交到一个可继续对话的会话中。两者均复用现有 DSH `0.2.0-rc.2` 的程序文件，使用独立的 `DSH_HOME`。
+生成方案、发现插件和安装到主环境都不调用模型。后台一次性任务通过官方 SDK 启动 `sdk` profile；独立客户端启动 `desktop` profile，网页窗口启动 `web` profile，并将输入的任务提交到一个可继续对话的会话中。两者均复用现有 DSH `0.2.0-rc.2` 的程序文件，使用独立的 `DSH_HOME`。
 
 默认 provider 读取 `DEEPSEEK_API_KEY`。该变量必须存在于启动宿主的进程环境中，才能转发给子进程；只在另一个终端中设置变量，不会改变已经运行的 Desktop 进程。AutoCompose 不复制原 DSH 的凭据文件或登录状态。
 
@@ -63,7 +82,7 @@
 查看已发布版本的帮助：
 
 ```powershell
-npx --yes --package=dsh-autocompose@0.4.0 dsh-autocompose --help
+npx --yes --package=dsh-autocompose@0.5.0 dsh-autocompose --help
 ```
 
 以下命令在源码仓库中运行，先执行 `npm ci --ignore-scripts` 与 `npm run build`：
@@ -99,7 +118,8 @@ DSH 页面与工具自动使用宿主安装目录。单独通过 `npx` 执行任
 
 | `action` | 主要参数 | 结果 |
 | --- | --- | --- |
-| `assemble` | `task`，可选 `capabilities`、`destination`、`mode` | 自动搜索、规划并经 DSH 批准安装。默认 `destination: main`；`window` 创建可继续对话的独立环境，返回环境记录和打开链接 |
+| `assemble` | `task`，可选 `capabilities`、`destination`、`mode` | 自动搜索、规划并经 DSH 批准安装。默认 `destination: main`；`window` 创建可继续对话的独立环境，Desktop 直接打开客户端并返回环境记录，Web 返回打开链接 |
+| `reveal_environment` | `environmentId` | 唤回当前会话的独立客户端；Web 返回打开链接 |
 | `close_environment` | `environmentId` | 停止当前会话创建的独立环境，保留文件 |
 | `plan` | `task`，可选 `capabilities` | 返回方案，其中 `id` 在后续调用中作为 `planId` |
 | `discover` | `task` 填写中英文关键词 | 返回候选，不安装 |
@@ -128,4 +148,4 @@ DSH 页面与工具自动使用宿主安装目录。单独通过 `npx` 执行任
 
 CLI 的后台临时环境默认删除，传入 `--keep` 后保留。清理失败或无法确认子进程退出时会保留目录并记录原因。主环境中已经成功安装的插件持续保留，可在 DSH 插件管理中停用或卸载。安装中断后重新预览，会依据当时实际状态区分新增、版本替换、启用与复用。
 
-页面默认勾选保留文件与会话；取消后，在“关闭环境”或后台任务结束时清理。退出宿主时停止其独立窗口进程并保留目录。浏览器页面关闭不会停止独立环境，可以通过“重新打开”继续访问；访问链接只在当前进程有效。
+页面默认勾选保留文件与会话；取消后，在“关闭环境”或后台任务结束时清理。退出宿主时停止其独立窗口进程并保留目录。关闭窗口不会停止独立环境，可以通过“重新打开”继续；客户端模式唤回原实例，网页模式返回当前进程的访问链接。

@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { stringify } from 'yaml';
+import { stringify, parse } from 'yaml';
 import { atomicWrite, digest, readJson, removeOwnedRun, writeJson } from '../shared/files.ts';
 import { childEnvironment, runProcess, stopTree } from '../shared/process.ts';
 import { scanProfile } from '../shared/profile.ts';
@@ -13,6 +13,9 @@ import { inspectCandidate, RUNTIME_VERSION } from './catalog.ts';
 import { resolveRuntime } from './runtime.ts';
 import type { ComposePlan } from './planner.ts';
 import type { RunOptions } from './runner.ts';
+import { desktopLaunch, windowMode, type WindowOptions } from './desktop.ts';
+
+export interface EnvironmentOptions extends Omit<RunOptions, 'signal' | 'onProgress'>, WindowOptions {}
 
 export interface EnvironmentRecord {
   id: string; planId: string; owner?: string; task: string; cwd: string; directory: string; startedAt: string; finishedAt?: string;
@@ -20,16 +23,27 @@ export interface EnvironmentRecord {
   stage: string; currentPackage?: string; sessionId?: string; error?: string; warning?: string;
   cleanup: 'pending' | 'kept' | 'removed' | 'failed'; keep: boolean;
   packages: { name: string; version: string }[];
+  windowMode?: 'desktop' | 'web'; processId?: number;
 }
-interface Owned { record: EnvironmentRecord; child?: ChildProcess; exited?: Promise<void>; url?: string; stopping?: Promise<void> }
+interface Owned { record: EnvironmentRecord; child?: ChildProcess; exited?: Promise<void>; url?: string; stopping?: Promise<void>;
+  desktop?: ReturnType<typeof desktopLaunch> }
 export class WebEnvironments {
   private owned = new Map<string, Owned>();
-  constructor(readonly options: Omit<RunOptions, 'signal' | 'onProgress'>) {}
+  constructor(readonly options: EnvironmentOptions) {}
+  mode(): 'desktop' | 'web' { return windowMode(this.options); }
   active(id: string): boolean { return this.owned.has(id); }
   url(id: string, owner?: string): string {
     const item = this.owned.get(id);
     if (!item || item.record.owner !== owner || item.record.status !== 'ready' || !item.url) throw new Error('环境已经关闭，请从方案重新打开。');
     return item.url;
+  }
+  async reveal(id: string, owner?: string): Promise<{ windowMode: 'desktop' | 'web'; url?: string }> {
+    const item = this.owned.get(id);
+    if (!item || item.record.owner !== owner || item.record.status !== 'ready') throw new Error('环境已经关闭，请从方案重新打开。');
+    if (!item.desktop) return { windowMode: 'web', url: this.url(id, owner) };
+    // The same user-data-dir targets this environment's single-instance lock and focuses its window.
+    await runProcess(item.desktop.executable, item.desktop.args, { cwd: item.record.cwd, env: item.desktop.env, timeoutMs: 15000 });
+    return { windowMode: 'desktop' };
   }
   private async save(item: Owned): Promise<void> { await writeJson(join(this.options.root, 'environments', `${item.record.id}.json`), item.record); }
   async open(plan: ComposePlan, options: { mode: 'read-only' | 'workspace-write'; keep: boolean; signal: AbortSignal;
@@ -40,10 +54,13 @@ export class WebEnvironments {
     if (!(await stat(plan.cwd)).isDirectory()) throw new Error('工作目录不存在。');
     if (this.owned.size >= 3) throw new Error('最多同时打开三个独立环境，请先关闭一个。');
     const id = randomUUID(), directory = join(this.options.root, 'runs', id), home = join(directory, 'home');
+    const mode = this.mode();
+    const desktop = mode === 'desktop' ? desktopLaunch(this.options, home, directory, this.options.envKeys) : undefined;
+    const profile = desktop ? 'desktop' : 'web';
     const record: EnvironmentRecord = { id, planId: plan.id, owner: plan.owner, task: plan.task, cwd: plan.cwd, directory,
       startedAt: new Date().toISOString(), status: 'starting', stage: '准备独立环境', cleanup: 'pending', keep: options.keep,
-      packages: plan.selected.map(x => ({ name: x.name, version: x.version })) };
-    const item: Owned = { record }; this.owned.set(id, item);
+      windowMode: mode, packages: plan.selected.map(x => ({ name: x.name, version: x.version })) };
+    const item: Owned = { record, desktop }; this.owned.set(id, item);
     const progress = async (stage: string, currentPackage?: string) => {
       record.stage = stage; record.currentPackage = currentPackage; await this.save(item);
       try { options.onProgress?.(structuredClone(record)); } catch { /* Observers do not control the runtime. */ }
@@ -55,35 +72,57 @@ export class WebEnvironments {
       await writeJson(join(directory, '.autocompose-owner.json'), { id, pid: process.pid });
       await progress('准备独立环境');
       const runtime = resolveRuntime(this.options.installAnchor);
-      const env = { ...childEnvironment(this.options.envKeys ?? ['DEEPSEEK_API_KEY']), DSH_HOME: home,
-        ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
-      await runProcess(process.execPath, [runtime.bin, '--profile', 'web', '--dump-config'], { cwd: directory, env, signal });
+      const env = { ...(desktop?.env ?? childEnvironment(this.options.envKeys ?? ['DEEPSEEK_API_KEY'])), DSH_HOME: home,
+        ...(desktop || process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
+      const command = desktop?.executable ?? process.execPath;
+      const cli = desktop ? ['--expose-internals', desktop.cli] : [runtime.bin];
+      const profileDir = join(home, 'profiles', profile);
+      if (desktop) {
+        const version = await runProcess(command, [...cli, '--version'], { cwd: directory, env, signal });
+        if (version.output.trim() !== RUNTIME_VERSION) throw new Error(`独立客户端需要 DSH ${RUNTIME_VERSION}，请使用与主环境相同版本的客户端。`);
+        await mkdir(profileDir, { recursive: true });
+        await writeJson(join(profileDir, 'package.json'), { name: 'dsh-profile-desktop', private: true, dependencies: {},
+          dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } });
+        await atomicWrite(join(profileDir, 'pnpm-workspace.yaml'), 'packages:\n  - .\nnodeLinker: hoisted\nautoInstallPeers: false\n');
+      } else await runProcess(command, [...cli, '--profile', profile, '--dump-config'], { cwd: directory, env, signal });
       for (const candidate of plan.selected.filter(x => x.source === 'npm')) {
         await progress('安装所选插件', candidate.name);
         const fresh = await inspectCandidate(candidate.name, candidate.version, candidate.capabilities, signal);
         if (fresh.integrity !== candidate.integrity || fresh.metadataHash !== candidate.metadataHash) throw new Error(`${candidate.name} 发布内容已变化，请重新生成方案。`);
-        await runProcess(process.execPath, [runtime.bin, 'plugin', '--profile', 'web', 'add', `${candidate.name}@${candidate.version}`,
+        await runProcess(command, [...cli, 'plugin', '--profile', profile, 'add', `${candidate.name}@${candidate.version}`,
           '--save-exact', '--ignore-scripts', '--registry=https://registry.npmjs.org'], { cwd: directory, env, signal });
       }
       await progress('检查实际安装的插件');
-      const report = checkCompatibility(await scanProfile(join(home, 'profiles', 'web'), runtime.manifest), RUNTIME_VERSION);
+      const report = checkCompatibility(await scanProfile(profileDir, runtime.manifest), RUNTIME_VERSION);
       const failures = report.findings.filter(x => x.severity === 'error');
       if (failures.length) throw new Error(failures.map(x => x.message).join('；'));
-      const patch = join(directory, 'window.patch.yml'), readyFile = join(directory, 'ready.json');
+      const patch = desktop ? join(profileDir, 'cordis.patch.yml') : join(directory, 'window.patch.yml'), readyFile = join(directory, 'ready.json');
       // Keep the bootstrap outside this package so DSH does not also load AutoCompose's client in the child.
       const entry = join(directory, 'bootstrap.mjs');
       await copyFile(fileURLToPath(new URL('./environment-entry.js', import.meta.url)), entry);
+      let previous: unknown[] = [];
+      if (desktop) {
+        try { previous = parse(await readFile(patch, 'utf8')) ?? []; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        if (!Array.isArray(previous)) throw new Error('独立环境的插件配置格式不正确。');
+      }
       await atomicWrite(patch, stringify([
+        ...previous,
+        { id: 'webserver', config: { host: '127.0.0.1', port: 0 } },
         { id: 'sandbox-policy', config: { mode: options.mode, workspaceRoot: plan.cwd } },
         { id: 'agent-default-model', config: { provider: this.options.provider ?? 'deepseek-official', model: this.options.model ?? 'deepseek-v4-flash' } },
         { id: 'tool-plugin-manager', disabled: true },
         { insert: [{ id: 'autocompose-window', name: entry,
-          config: { cwd: plan.cwd, task: plan.task, readyFile } }] },
+          config: { cwd: plan.cwd, task: plan.task, readyFile, ...(desktop ? { ownerPid: process.pid } : {}) } }] },
       ]));
-      await progress('启动 DSH 窗口');
-      const child = spawn(process.execPath, [runtime.bin, '--profile', 'web', '--patch', patch, '--no-open', '--host', '127.0.0.1', '--port', '0'],
-        { cwd: plan.cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+      await progress(desktop ? '启动独立 DSH 客户端' : '启动 DSH 网页窗口');
+      const child = desktop
+        ? spawn(desktop.executable, desktop.args, { cwd: plan.cwd, env: desktop.env, windowsHide: false,
+          detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
+        : spawn(command, [...cli, '--profile', profile, '--patch', patch, '--no-open', '--host', '127.0.0.1', '--port', '0'],
+          { cwd: plan.cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
       item.child = child;
+      record.processId = child.pid;
       let output = '', failure: Error | undefined, exited = false;
       const collect = (data: Buffer) => {
         output = (output + data.toString('utf8')).slice(-16000);
@@ -98,7 +137,7 @@ export class WebEnvironments {
       item.exited = new Promise(done => child.once('close', () => { exited = true; done(); }));
       void item.exited.then(async () => {
         if (record.status !== 'ready') return;
-        record.status = 'failed'; record.error = '独立 DSH 进程已退出，可从方案重新打开。';
+        if (child.exitCode !== 0) { record.status = 'failed'; record.error = '独立 DSH 进程已退出，可从方案重新打开。'; }
         try { await this.close(id, record.owner); } catch { /* close records cleanup failure. */ }
       });
       const deadline = Date.now() + 90000;
@@ -107,7 +146,7 @@ export class WebEnvironments {
         if (failure) throw failure;
         if (exited) throw new Error(`独立 DSH 启动失败：${output.replace(/token=[^\s&]+/g, 'token=<redacted>')}`);
         if (Date.now() > deadline) throw new Error('独立 DSH 启动超时。');
-        if (item.url) {
+        if (desktop || item.url) {
           try {
             const ready = await readJson<{ sessionId?: string; warning?: string }>(readyFile);
             Object.assign(record, ready); break;
@@ -115,7 +154,7 @@ export class WebEnvironments {
         }
         await delay(150, undefined, { signal });
       }
-      record.status = 'ready'; await progress('窗口已就绪，可持续对话');
+      record.status = 'ready'; await progress(desktop ? '独立客户端已启动，可持续对话' : '网页窗口已就绪，可持续对话');
       return structuredClone(record);
     } catch (error) {
       record.status = 'failed'; record.error = options.signal.aborted ? '启动已取消' : String(error);

@@ -7,8 +7,8 @@ import { parseRequest } from '../shared/rpc.ts';
 import { RUNTIME_VERSION } from './catalog.ts';
 import { loadPlan, savePlan, type ComposePlan } from './planner.ts';
 import { planTask, type PlanningProgress } from './planning.ts';
-import { WebEnvironments, type EnvironmentRecord } from './environments.ts';
-import { loadPreset, runIsActive, runPlan, savePreset, type RunEvidence, type RunOptions } from './runner.ts';
+import { WebEnvironments, type EnvironmentRecord, type EnvironmentOptions } from './environments.ts';
+import { loadPreset, runIsActive, runPlan, savePreset, type RunEvidence } from './runner.ts';
 import type { HostInstaller, InstallEvidence, MainEnvironment } from './host-install.ts';
 
 const key = z.string().uuid();
@@ -30,6 +30,7 @@ const requests = z.discriminatedUnion('action', [
   z.object({ action: z.literal('openEnvironment'), planId: key, fingerprint: z.string().length(64),
     mode: z.enum(['read-only', 'workspace-write']), keep: z.boolean() }).strict(),
   z.object({ action: z.literal('environmentUrl'), environmentId: key }).strict(),
+  z.object({ action: z.literal('revealEnvironment'), environmentId: key }).strict(),
   z.object({ action: z.literal('closeEnvironment'), environmentId: key }).strict(),
 ]);
 export interface ComposeJob {
@@ -44,8 +45,9 @@ export interface ComposeOverview {
   mainEnvironment?: MainEnvironment;
   installations: InstallEvidence[];
   environments: EnvironmentRecord[];
+  windowMode: 'desktop' | 'web';
 }
-interface Options extends Omit<RunOptions, 'signal' | 'onProgress'> { catalog?: string; autoDiscover?: boolean; installer?: HostInstaller }
+interface Options extends EnvironmentOptions { catalog?: string; autoDiscover?: boolean; installer?: HostInstaller }
 
 async function recent<T>(directory: string, count: number, notices: string[]): Promise<T[]> {
   let names: string[];
@@ -95,7 +97,7 @@ export class ComposeController {
       recent<EnvironmentRecord>(join(this.options.root, 'environments'), 30, notices),
     ]);
     const active = new Set([...this.jobs.values()].map(x => x.view.run?.id));
-    return { cwd: process.cwd(), runtimeVersion: RUNTIME_VERSION,
+    return { cwd: process.cwd(), runtimeVersion: RUNTIME_VERSION, windowMode: this.environments.mode(),
       jobs: [...this.jobs.values()].map(x => structuredClone(x.view)).reverse(),
       mainEnvironment: this.options.installer?.target(),
       environments: environments.filter(x => x.owner === 'web-ui').map(x => ['starting', 'ready', 'closing'].includes(x.status) && !this.environments.active(x.id) ?
@@ -111,6 +113,7 @@ export class ComposeController {
     if (this.disposed) throw new Error('插件正在关闭');
     if (args.action === 'overview') return JSON.stringify(await this.overview());
     if (args.action === 'environmentUrl') return JSON.stringify({ url: this.environments.url(args.environmentId, 'web-ui') });
+    if (args.action === 'revealEnvironment') return JSON.stringify(await this.environments.reveal(args.environmentId, 'web-ui'));
     if (args.action === 'closeEnvironment') return JSON.stringify(await this.environments.close(args.environmentId, 'web-ui'));
     if (args.action === 'plan' || args.action === 'assemble') {
       const cwd = resolve(args.cwd);
